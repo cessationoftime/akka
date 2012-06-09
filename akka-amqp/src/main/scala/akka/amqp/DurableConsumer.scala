@@ -1,5 +1,6 @@
 package akka.amqp
 
+import akka.util.duration._
 import com.rabbitmq.client.AMQP.BasicProperties
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.{ CountDownLatch, TimeUnit }
@@ -8,6 +9,7 @@ import com.rabbitmq.client.{ ShutdownSignalException, Envelope, DefaultConsumer 
 import java.io.IOException
 import akka.actor.ActorRef
 import akka.event.Logging
+import akka.dispatch.{ Await, Future }
 
 case class ReturnedMessage(replyCode: Int,
                            replyText: String,
@@ -43,7 +45,7 @@ class DurableConsumer(durableConnection: DurableConnection,
 
   val consumerTag = new AtomicReference[Option[String]](None)
   val latch = new CountDownLatch(1)
-  onAvailable {
+  val queueNameFuture = withChannel {
     channel ⇒
       val queueName = queue match {
         case managed: ManagedQueue ⇒
@@ -69,6 +71,8 @@ class DurableConsumer(durableConnection: DurableConnection,
       consumerTag.set(Some(tag))
       latch.countDown()
   }
+
+  val queueName = akka.dispatch.Await.result(queueNameFuture, 2 seconds)
 
   def awaitStart(timeout: Long = 5, unit: TimeUnit = TimeUnit.SECONDS) = {
     latch.await(timeout, unit)
