@@ -70,6 +70,7 @@ class DurableConsumer(durableConnection: DurableConnection,
       })
       consumerTag.set(Some(tag))
       latch.countDown()
+      queueName
   }
 
   val queueName = akka.dispatch.Await.result(queueNameFuture, 2 seconds)
