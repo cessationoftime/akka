@@ -45,7 +45,7 @@ class DurableConsumer(durableConnection: DurableConnection,
 
   val consumerTag = new AtomicReference[Option[String]](None)
   val latch = new CountDownLatch(1)
-  val queueNameFuture: Future[String] = withChannel {
+  onAvailable {
     channel ⇒
       val queueName = queue match {
         case managed: ManagedQueue ⇒
@@ -53,6 +53,7 @@ class DurableConsumer(durableConnection: DurableConnection,
           managed.declare(channel).name
         case unmanaged: UnmanagedQueue ⇒ unmanaged.name
       }
+
       queueBindings.foreach { binding ⇒
         binding.exchange match {
           case managed: ManagedExchange ⇒
@@ -70,10 +71,7 @@ class DurableConsumer(durableConnection: DurableConnection,
       })
       consumerTag.set(Some(tag))
       latch.countDown()
-      queueName
   }
-
-  def queueName = akka.dispatch.Await.result(queueNameFuture, 2 seconds)
 
   def awaitStart(timeout: Long = 5, unit: TimeUnit = TimeUnit.SECONDS) = {
     latch.await(timeout, unit)
