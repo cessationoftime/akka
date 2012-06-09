@@ -34,8 +34,11 @@ case class Delivery(payload: Array[Byte],
   }
 }
 
+<<<<<<< HEAD
 case class GeneratedQueueDeclared(queueName: String)
 
+=======
+>>>>>>> 18a8702... made queueName accessible
 class DurableConsumer(durableConnection: DurableConnection,
                       queue: Queue,
                       deliveryHandler: ActorRef,
@@ -47,8 +50,12 @@ class DurableConsumer(durableConnection: DurableConnection,
 
   val consumerTag = new AtomicReference[Option[String]](None)
   val latch = new CountDownLatch(1)
+<<<<<<< HEAD
 
   onAvailable {
+=======
+  val queueNameFuture = withChannel {
+>>>>>>> 18a8702... made queueName accessible
     channel ⇒
       val queueName = queue match {
         case managed: ManagedQueue ⇒
@@ -56,7 +63,10 @@ class DurableConsumer(durableConnection: DurableConnection,
           managed.declare(channel).name
         case unmanaged: UnmanagedQueue ⇒ unmanaged.name
       }
+<<<<<<< HEAD
 
+=======
+>>>>>>> 18a8702... made queueName accessible
       queueBindings.foreach { binding ⇒
         binding.exchange match {
           case managed: ManagedExchange ⇒
@@ -74,9 +84,16 @@ class DurableConsumer(durableConnection: DurableConnection,
       })
       consumerTag.set(Some(tag))
       latch.countDown()
+<<<<<<< HEAD
       if (queueName.substring(0, 8) == "amq.gen-") deliveryHandler ! GeneratedQueueDeclared(queueName)
   }
 
+=======
+  }
+
+  val queueName = akka.dispatch.Await.result(queueNameFuture, 2 seconds)
+
+>>>>>>> 18a8702... made queueName accessible
   def awaitStart(timeout: Long = 5, unit: TimeUnit = TimeUnit.SECONDS) = {
     latch.await(timeout, unit)
   }
