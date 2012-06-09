@@ -45,7 +45,7 @@ class DurableConsumer(durableConnection: DurableConnection,
 
   val consumerTag = new AtomicReference[Option[String]](None)
   val latch = new CountDownLatch(1)
-  val queueNameFuture = withChannel {
+  val queueNameFuture: Future[String] = withChannel {
     channel ⇒
       val queueName = queue match {
         case managed: ManagedQueue ⇒
@@ -73,7 +73,7 @@ class DurableConsumer(durableConnection: DurableConnection,
       queueName
   }
 
-  val queueName = akka.dispatch.Await.result(queueNameFuture, 2 seconds)
+  def queueName = akka.dispatch.Await.result(queueNameFuture, 2 seconds)
 
   def awaitStart(timeout: Long = 5, unit: TimeUnit = TimeUnit.SECONDS) = {
     latch.await(timeout, unit)
