@@ -34,6 +34,9 @@ case class Delivery(payload: Array[Byte],
   }
 }
 
+
+case class GeneratedQueueDeclared(queueName: String)
+
 class DurableConsumer(durableConnection: DurableConnection,
                       queue: Queue,
                       deliveryHandler: ActorRef,
@@ -45,6 +48,7 @@ class DurableConsumer(durableConnection: DurableConnection,
 
   val consumerTag = new AtomicReference[Option[String]](None)
   val latch = new CountDownLatch(1)
+    
   onAvailable {
     channel ⇒
       val queueName = queue match {
@@ -71,6 +75,7 @@ class DurableConsumer(durableConnection: DurableConnection,
       })
       consumerTag.set(Some(tag))
       latch.countDown()
+	  if (queueName.substring(0,8) == "amq.gen-") deliveryHandler ! GeneratedQueueDeclared(queueName)
   }
 
   def awaitStart(timeout: Long = 5, unit: TimeUnit = TimeUnit.SECONDS) = {
