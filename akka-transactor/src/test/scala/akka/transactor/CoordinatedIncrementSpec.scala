@@ -7,12 +7,12 @@ package akka.transactor
 import org.scalatest.BeforeAndAfterAll
 
 import akka.actor._
-import akka.dispatch.Await
-import akka.util.duration._
+import scala.concurrent.Await
+import scala.concurrent.util.duration._
 import akka.util.Timeout
 import akka.testkit._
 import scala.concurrent.stm._
-import akka.pattern.ask
+import akka.pattern.{ AskTimeoutException, ask }
 
 object CoordinatedIncrement {
 
@@ -96,7 +96,7 @@ class CoordinatedIncrementSpec extends AkkaSpec(CoordinatedIncrement.config) wit
       val ignoreExceptions = Seq(
         EventFilter[ExpectedFailureException](),
         EventFilter[CoordinatedTransactionException](),
-        EventFilter[ActorTimeoutException]())
+        EventFilter[AskTimeoutException]())
       filterEvents(ignoreExceptions) {
         val (counters, failer) = actorOfs
         val coordinated = Coordinated()

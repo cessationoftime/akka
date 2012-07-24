@@ -24,3 +24,6 @@ Java API
    extending-akka
    zeromq
    microkernel
+   camel
+   testing
+   howto

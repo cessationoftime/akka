@@ -6,8 +6,8 @@ package akka.zeromq
 import com.google.protobuf.Message
 import org.zeromq.{ ZMQ ⇒ JZMQ }
 import akka.actor.ActorRef
-import akka.util.duration._
-import akka.util.Duration
+import scala.concurrent.util.duration._
+import scala.concurrent.util.Duration
 import org.zeromq.ZMQ.{ Poller, Socket }
 
 /**
@@ -48,7 +48,7 @@ sealed trait SocketOptionQuery extends Request
 /**
  * This socket should be a client socket and connect to the specified endpoint
  *
- * @param endpoint an uri like tcp://127.0.0.1.5432
+ * @param endpoint URI (ex. tcp://127.0.0.1:5432)
  */
 case class Connect(endpoint: String) extends SocketConnectOption
 
@@ -162,14 +162,14 @@ case class PollTimeoutDuration(duration: Duration = 100 millis) extends SocketMe
 case class Bind(endpoint: String) extends SocketConnectOption
 
 /**
- * The [[akka.zeromq.Subscribe]] option shall establish a new message filter on a [[akka.zeromq.SocketType.Pub]] socket.
- * Newly created [[akka.zeromq.SocketType.Sub]] sockets shall filter out all incoming messages,
+ * The [[akka.zeromq.Subscribe]] option establishes a new message filter on a [[akka.zeromq.SocketType.Pub]] socket.
+ * Newly created [[akka.zeromq.SocketType.Sub]] sockets filter out all incoming messages,
  * therefore you should send this option to establish an initial message filter.
  *
- * An empty payload of length zero shall subscribe to all incoming messages.
- * A non-empty payload shall subscribe to all messages beginning with the specified prefix.
+ * An empty payload of length zero will subscribe to all incoming messages.
+ * A non-empty payload will subscribe to all messages beginning with the specified prefix.
  * Multiple filters may be attached to a single [[akka.zeromq.SocketType.Sub]] socket,
- * in which case a message shall be accepted if it matches at least one filter.
+ * in which case a message will be accepted if it matches at least one filter.
  *
  * @param payload the topic to subscribe to
  */
@@ -255,7 +255,9 @@ case class Linger(value: Long) extends SocketOption
 /**
  * Gets the linger option @see [[akka.zeromq.Linger]]
  */
-object Linger extends SocketOptionQuery
+object Linger extends SocketOptionQuery {
+  val no: Linger = Linger(0)
+}
 
 /**
  * Sets the recovery interval for multicast transports using the specified socket.

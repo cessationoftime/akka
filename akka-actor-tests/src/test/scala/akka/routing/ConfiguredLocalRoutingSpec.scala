@@ -3,17 +3,17 @@
  */
 package akka.routing
 
+import language.postfixOps
+
 import java.util.concurrent.atomic.AtomicInteger
-
 import org.junit.runner.RunWith
-
-import akka.actor.actorRef2Scala
-import akka.actor.{ Props, LocalActorRef, Deploy, Actor }
-import akka.config.ConfigurationException
-import akka.dispatch.Await
+import akka.actor.{ Props, Deploy, Actor, ActorRef }
+import akka.ConfigurationException
+import scala.concurrent.Await
 import akka.pattern.{ ask, gracefulStop }
 import akka.testkit.{ TestLatch, ImplicitSender, DefaultTimeout, AkkaSpec }
-import akka.util.duration.intToDurationInt
+import scala.concurrent.util.duration.intToDurationInt
+import akka.actor.UnstartedCell
 
 object ConfiguredLocalRoutingSpec {
   val config = """
@@ -31,6 +31,14 @@ object ConfiguredLocalRoutingSpec {
             router = random
             nr-of-instances = 4
           }
+          /weird {
+            router = round-robin
+            nr-of-instances = 3
+          }
+          "/weird/*" {
+            router = round-robin
+            nr-of-instances = 2
+          }
         }
       }
     }
@@ -40,6 +48,14 @@ object ConfiguredLocalRoutingSpec {
 @org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
 class ConfiguredLocalRoutingSpec extends AkkaSpec(ConfiguredLocalRoutingSpec.config) with DefaultTimeout with ImplicitSender {
 
+  def routerConfig(ref: ActorRef): RouterConfig = ref match {
+    case r: RoutedActorRef ⇒
+      r.underlying match {
+        case c: RoutedActorCell ⇒ c.routerConfig
+        case _: UnstartedCell   ⇒ awaitCond(r.isStarted, 1 second, 10 millis); routerConfig(ref)
+      }
+  }
+
   "RouterConfig" must {
 
     "be picked up from Props" in {
@@ -48,7 +64,7 @@ class ConfiguredLocalRoutingSpec extends AkkaSpec(ConfiguredLocalRoutingSpec.con
           case "get" ⇒ sender ! context.props
         }
       }).withRouter(RoundRobinRouter(12)), "someOther")
-      actor.asInstanceOf[LocalActorRef].underlying.props.routerConfig must be === RoundRobinRouter(12)
+      routerConfig(actor) must be === RoundRobinRouter(12)
       Await.result(gracefulStop(actor, 3 seconds), 3 seconds)
     }
 
@@ -58,7 +74,7 @@ class ConfiguredLocalRoutingSpec extends AkkaSpec(ConfiguredLocalRoutingSpec.con
           case "get" ⇒ sender ! context.props
         }
       }).withRouter(RoundRobinRouter(12)), "config")
-      actor.asInstanceOf[LocalActorRef].underlying.props.routerConfig must be === RandomRouter(4)
+      routerConfig(actor) must be === RandomRouter(4)
       Await.result(gracefulStop(actor, 3 seconds), 3 seconds)
     }
 
@@ -68,7 +84,7 @@ class ConfiguredLocalRoutingSpec extends AkkaSpec(ConfiguredLocalRoutingSpec.con
           case "get" ⇒ sender ! context.props
         }
       }).withRouter(FromConfig).withDeploy(Deploy(routerConfig = RoundRobinRouter(12))), "someOther")
-      actor.asInstanceOf[LocalActorRef].underlying.props.routerConfig must be === RoundRobinRouter(12)
+      routerConfig(actor) must be === RoundRobinRouter(12)
       Await.result(gracefulStop(actor, 3 seconds), 3 seconds)
     }
 
@@ -78,7 +94,7 @@ class ConfiguredLocalRoutingSpec extends AkkaSpec(ConfiguredLocalRoutingSpec.con
           case "get" ⇒ sender ! context.props
         }
       }).withRouter(FromConfig).withDeploy(Deploy(routerConfig = RoundRobinRouter(12))), "config")
-      actor.asInstanceOf[LocalActorRef].underlying.props.routerConfig must be === RandomRouter(4)
+      routerConfig(actor) must be === RandomRouter(4)
       Await.result(gracefulStop(actor, 3 seconds), 3 seconds)
     }
 
@@ -86,6 +102,17 @@ class ConfiguredLocalRoutingSpec extends AkkaSpec(ConfiguredLocalRoutingSpec.con
       intercept[ConfigurationException] {
         system.actorOf(Props.empty.withRouter(FromConfig))
       }
+    }
+
+    "not get confused when trying to wildcard-configure children" in {
+      val router = system.actorOf(Props(new Actor {
+        testActor ! self
+        def receive = { case _ ⇒ }
+      }).withRouter(FromConfig), "weird")
+      val recv = Set() ++ (for (_ ← 1 to 3) yield expectMsgType[ActorRef])
+      val expc = Set('a', 'b', 'c') map (i ⇒ system.actorFor("/user/weird/$" + i))
+      recv must be(expc)
+      expectNoMsg(1 second)
     }
 
   }

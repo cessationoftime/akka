@@ -3,24 +3,28 @@
  */
 package akka.actor.dispatch
 
-import org.scalatest.Assertions._
-import akka.testkit._
-import akka.dispatch._
-import akka.util.Timeout
-import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.{ ConcurrentHashMap, CountDownLatch, TimeUnit }
-import akka.util.Switch
+import language.postfixOps
+
 import java.rmi.RemoteException
-import org.junit.{ After, Test }
-import akka.actor._
-import util.control.NoStackTrace
-import akka.actor.ActorSystem
-import akka.util.duration._
-import akka.event.Logging.Error
+import java.util.concurrent.{ TimeUnit, CountDownLatch, ConcurrentHashMap }
+import java.util.concurrent.atomic.{ AtomicLong, AtomicInteger }
+
+import org.junit.runner.RunWith
+import org.scalatest.Assertions.{ fail, assert }
+import org.scalatest.junit.JUnitRunner
+
 import com.typesafe.config.Config
-import akka.util.Duration
+
+import akka.actor._
+import akka.dispatch._
+import akka.event.Logging.Error
 import akka.pattern.ask
+import akka.testkit._
+import akka.util.{ Timeout, Switch }
+import scala.concurrent.util.duration._
+import scala.concurrent.util.Duration
+import scala.concurrent.{ Await, Future, Promise }
+import scala.annotation.tailrec
 
 object ActorModelSpec {
 
@@ -155,7 +159,7 @@ object ActorModelSpec {
     try {
       await(deadline)(stops == dispatcher.stops.get)
     } catch {
-      case e ⇒
+      case e: Throwable ⇒
         system.eventStream.publish(Error(e, dispatcher.toString, dispatcher.getClass, "actual: stops=" + dispatcher.stops.get +
           " required: stops=" + stops))
         throw e
@@ -201,7 +205,7 @@ object ActorModelSpec {
     msgsReceived: Long = statsFor(actorRef, dispatcher).msgsReceived.get(),
     msgsProcessed: Long = statsFor(actorRef, dispatcher).msgsProcessed.get(),
     restarts: Long = statsFor(actorRef, dispatcher).restarts.get())(implicit system: ActorSystem) {
-    val stats = statsFor(actorRef, Option(dispatcher).getOrElse(actorRef.asInstanceOf[LocalActorRef].underlying.dispatcher))
+    val stats = statsFor(actorRef, Option(dispatcher).getOrElse(actorRef.asInstanceOf[ActorRefWithCell].underlying.asInstanceOf[ActorCell].dispatcher))
     val deadline = System.currentTimeMillis + 1000
     try {
       await(deadline)(stats.suspensions.get() == suspensions)
@@ -212,7 +216,7 @@ object ActorModelSpec {
       await(deadline)(stats.msgsProcessed.get() == msgsProcessed)
       await(deadline)(stats.restarts.get() == restarts)
     } catch {
-      case e ⇒
+      case e: Throwable ⇒
         system.eventStream.publish(Error(e,
           Option(dispatcher).toString,
           (Option(dispatcher) getOrElse this).getClass,
@@ -223,16 +227,16 @@ object ActorModelSpec {
     }
   }
 
-  def await(until: Long)(condition: ⇒ Boolean): Unit = try {
-    while (System.currentTimeMillis() <= until) {
-      try {
-        if (condition) return else Thread.sleep(25)
-      } catch {
-        case e: InterruptedException ⇒
-      }
+  @tailrec def await(until: Long)(condition: ⇒ Boolean): Unit = if (System.currentTimeMillis() <= until) {
+    var done = false
+    try {
+      done = condition
+      if (!done) Thread.sleep(25)
+    } catch {
+      case e: InterruptedException ⇒
     }
-    throw new AssertionError("await failed")
-  }
+    if (!done) await(until)(condition)
+  } else throw new AssertionError("await failed")
 }
 
 abstract class ActorModelSpec(config: String) extends AkkaSpec(config) with DefaultTimeout {
@@ -240,6 +244,13 @@ abstract class ActorModelSpec(config: String) extends AkkaSpec(config) with Defa
   import ActorModelSpec._
 
   def newTestActor(dispatcher: String) = system.actorOf(Props[DispatcherActor].withDispatcher(dispatcher))
+
+  def awaitStarted(ref: ActorRef): Unit = {
+    awaitCond(ref match {
+      case r: RepointableRef ⇒ r.isStarted
+      case _                 ⇒ true
+    }, 1 second, 10 millis)
+  }
 
   protected def interceptedDispatcher(): MessageDispatcherInterceptor
   protected def dispatcherType: String
@@ -280,6 +291,7 @@ abstract class ActorModelSpec(config: String) extends AkkaSpec(config) with Defa
       implicit val dispatcher = interceptedDispatcher()
       val start, oneAtATime = new CountDownLatch(1)
       val a = newTestActor(dispatcher.id)
+      awaitStarted(a)
 
       a ! CountDown(start)
       assertCountDown(start, 3.seconds.dilated.toMillis, "Should process first message within 3 seconds")
@@ -328,14 +340,15 @@ abstract class ActorModelSpec(config: String) extends AkkaSpec(config) with Defa
 
     "not process messages for a suspended actor" in {
       implicit val dispatcher = interceptedDispatcher()
-      val a = newTestActor(dispatcher.id).asInstanceOf[LocalActorRef]
+      val a = newTestActor(dispatcher.id).asInstanceOf[InternalActorRef]
+      awaitStarted(a)
       val done = new CountDownLatch(1)
       a.suspend
       a ! CountDown(done)
       assertNoCountDown(done, 1000, "Should not process messages while suspended")
       assertRefDefaultZero(a)(registers = 1, msgsReceived = 1, suspensions = 1)
 
-      a.resume
+      a.resume(inResponseToFailure = false)
       assertCountDown(done, 3.seconds.dilated.toMillis, "Should resume processing of messages when resumed")
       assertRefDefaultZero(a)(registers = 1, msgsReceived = 1, msgsProcessed = 1,
         suspensions = 1, resumes = 1)
@@ -374,7 +387,7 @@ abstract class ActorModelSpec(config: String) extends AkkaSpec(config) with Defa
                   def compare(l: AnyRef, r: AnyRef) = (l, r) match { case (ll: ActorCell, rr: ActorCell) ⇒ ll.self.path compareTo rr.self.path }
                 } foreach {
                   case cell: ActorCell ⇒
-                    System.err.println(" - " + cell.self.path + " " + cell.isTerminated + " " + cell.mailbox.status + " " + cell.mailbox.numberOfMessages + " " + SystemMessage.size(cell.mailbox.systemDrain()))
+                    System.err.println(" - " + cell.self.path + " " + cell.isTerminated + " " + cell.mailbox.status + " " + cell.mailbox.numberOfMessages + " " + SystemMessage.size(cell.mailbox.systemDrain(null)))
                 }
 
                 System.err.println("Mailbox: " + mq.numberOfMessages + " " + mq.hasMessages)
@@ -400,17 +413,17 @@ abstract class ActorModelSpec(config: String) extends AkkaSpec(config) with Defa
         val a = newTestActor(dispatcher.id)
         val f1 = a ? Reply("foo")
         val f2 = a ? Reply("bar")
-        val f3 = try { a ? Interrupt } catch { case ie: InterruptedException ⇒ Promise.failed(ActorInterruptedException(ie)) }
+        val f3 = try { a ? Interrupt } catch { case ie: InterruptedException ⇒ Promise.failed(new ActorInterruptedException(ie)).future }
         val f4 = a ? Reply("foo2")
-        val f5 = try { a ? Interrupt } catch { case ie: InterruptedException ⇒ Promise.failed(ActorInterruptedException(ie)) }
+        val f5 = try { a ? Interrupt } catch { case ie: InterruptedException ⇒ Promise.failed(new ActorInterruptedException(ie)).future }
         val f6 = a ? Reply("bar2")
 
         assert(Await.result(f1, timeout.duration) === "foo")
         assert(Await.result(f2, timeout.duration) === "bar")
         assert(Await.result(f4, timeout.duration) === "foo2")
-        assert(intercept[ActorInterruptedException](Await.result(f3, timeout.duration)).getMessage === "Ping!")
+        assert(intercept[ActorInterruptedException](Await.result(f3, timeout.duration)).getCause.getMessage === "Ping!")
         assert(Await.result(f6, timeout.duration) === "bar2")
-        assert(intercept[ActorInterruptedException](Await.result(f5, timeout.duration)).getMessage === "Ping!")
+        assert(intercept[ActorInterruptedException](Await.result(f5, timeout.duration)).getCause.getMessage === "Ping!")
       }
     }
 
@@ -436,6 +449,7 @@ abstract class ActorModelSpec(config: String) extends AkkaSpec(config) with Defa
 
     "not double-deregister" in {
       implicit val dispatcher = interceptedDispatcher()
+      for (i ← 1 to 1000) system.actorOf(Props.empty)
       val a = newTestActor(dispatcher.id)
       a ! DoubleStop
       awaitCond(statsFor(a, dispatcher).registers.get == 1)

@@ -4,15 +4,17 @@
 
 package akka.actor
 
+import language.postfixOps
+
 import org.scalatest.WordSpec
 import org.scalatest.matchers.MustMatchers
 
 import akka.testkit._
 import akka.util.Timeout
-import akka.util.duration._
+import scala.concurrent.util.duration._
+import scala.concurrent.Await
 import java.lang.IllegalStateException
-import java.util.concurrent.{ CountDownLatch, TimeUnit }
-import akka.dispatch.{ Await, DefaultPromise, Promise, Future }
+import scala.concurrent.Promise
 import akka.pattern.ask
 import akka.serialization.JavaSerializer
 
@@ -52,7 +54,7 @@ object ActorRefSpec {
     }
 
     private def work {
-      1.second.dilated.sleep
+      Thread.sleep(1.second.dilated.toMillis)
     }
   }
 
@@ -121,7 +123,7 @@ class ActorRefSpec extends AkkaSpec with DefaultTimeout {
     to.success(r)
     r
   } catch {
-    case e ⇒
+    case e: Throwable ⇒
       to.failure(e)
       throw e
   }
@@ -129,7 +131,7 @@ class ActorRefSpec extends AkkaSpec with DefaultTimeout {
   def wrap[T](f: Promise[Actor] ⇒ T): T = {
     val result = Promise[Actor]()
     val r = f(result)
-    Await.result(result, 1 minute)
+    Await.result(result.future, 1 minute)
     r
   }
 
@@ -227,7 +229,7 @@ class ActorRefSpec extends AkkaSpec with DefaultTimeout {
         contextStackMustBeEmpty
       }
 
-      filterException[java.lang.IllegalStateException] {
+      EventFilter[ActorInitializationException](occurrences = 1) intercept {
         (intercept[java.lang.IllegalStateException] {
           wrap(result ⇒
             actorOf(Props(new OuterActor(actorOf(Props(promiseIntercept({ throw new IllegalStateException("Ur state be b0rked"); new InnerActor })(result)))))))
@@ -257,14 +259,14 @@ class ActorRefSpec extends AkkaSpec with DefaultTimeout {
         val in = new ObjectInputStream(new ByteArrayInputStream(bytes))
         val readA = in.readObject
 
-        a.isInstanceOf[LocalActorRef] must be === true
-        readA.isInstanceOf[LocalActorRef] must be === true
+        a.isInstanceOf[ActorRefWithCell] must be === true
+        readA.isInstanceOf[ActorRefWithCell] must be === true
         (readA eq a) must be === true
       }
 
       val ser = new JavaSerializer(esys)
       val readA = ser.fromBinary(bytes, None)
-      readA.isInstanceOf[LocalActorRef] must be === true
+      readA.isInstanceOf[ActorRefWithCell] must be === true
       (readA eq a) must be === true
     }
 
@@ -358,17 +360,24 @@ class ActorRefSpec extends AkkaSpec with DefaultTimeout {
       system.stop(serverRef)
     }
 
+    "support actorOfs where the class of the actor isn't public" in {
+      val a = system.actorOf(NonPublicClass.createProps())
+      a.tell("pigdog", testActor)
+      expectMsg("pigdog")
+      system stop a
+    }
+
     "stop when sent a poison pill" in {
       val timeout = Timeout(20000)
       val ref = system.actorOf(Props(new Actor {
         def receive = {
-          case 5    ⇒ sender.tell("five")
-          case null ⇒ sender.tell("null")
+          case 5 ⇒ sender.tell("five")
+          case 0 ⇒ sender.tell("null")
         }
       }))
 
       val ffive = (ref.ask(5)(timeout)).mapTo[String]
-      val fnull = (ref.ask(null)(timeout)).mapTo[String]
+      val fnull = (ref.ask(0)(timeout)).mapTo[String]
       ref ! PoisonPill
 
       Await.result(ffive, timeout.duration) must be("five")
@@ -393,7 +402,7 @@ class ActorRefSpec extends AkkaSpec with DefaultTimeout {
               override def postRestart(reason: Throwable) = latch.countDown()
             }))
 
-          protected def receive = { case "sendKill" ⇒ ref ! Kill }
+          def receive = { case "sendKill" ⇒ ref ! Kill }
         }))
 
         boss ! "sendKill"

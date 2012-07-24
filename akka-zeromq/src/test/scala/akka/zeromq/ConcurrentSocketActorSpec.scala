@@ -1,14 +1,19 @@
 /**
- * Copyright (C) 2009-2011 Typesafe Inc. <http://www.typesafe.com>
+ * Copyright (C) 2009-2012 Typesafe Inc. <http://www.typesafe.com>
  */
 package akka.zeromq
 
+import language.postfixOps
+
 import org.scalatest.matchers.MustMatchers
 import akka.testkit.{ TestProbe, DefaultTimeout, AkkaSpec }
-import akka.util.duration._
+import scala.concurrent.util.duration._
 import akka.actor.{ Cancellable, Actor, Props, ActorRef }
+import akka.util.Timeout
 
-class ConcurrentSocketActorSpec extends AkkaSpec with DefaultTimeout {
+class ConcurrentSocketActorSpec extends AkkaSpec {
+
+  implicit val timeout: Timeout = Timeout(15 seconds)
 
   def checkZeroMQInstallation =
     try {
@@ -135,7 +140,7 @@ class ConcurrentSocketActorSpec extends AkkaSpec with DefaultTimeout {
       }
     }
 
-    protected def receive = {
+    def receive = {
       case _ ⇒
         val payload = "%s".format(messageNumber)
         messageNumber += 1

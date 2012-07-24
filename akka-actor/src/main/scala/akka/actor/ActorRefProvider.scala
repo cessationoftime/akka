@@ -4,12 +4,13 @@
 
 package akka.actor
 
-import java.util.concurrent.atomic.AtomicLong
 import akka.dispatch._
 import akka.routing._
-import akka.AkkaException
-import akka.util.{ Switch, Helpers }
 import akka.event._
+import akka.util.{ Switch, Helpers }
+import scala.util.control.NonFatal
+import scala.concurrent.{ Future, Promise }
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Interface for all ActorRef providers to implement.
@@ -26,12 +27,12 @@ trait ActorRefProvider {
   /**
    * Reference to the supervisor used for all top-level user actors.
    */
-  def guardian: InternalActorRef
+  def guardian: LocalActorRef
 
   /**
    * Reference to the supervisor used for all top-level system actors.
    */
-  def systemGuardian: InternalActorRef
+  def systemGuardian: LocalActorRef
 
   /**
    * Dead letter destination for this provider.
@@ -39,18 +40,17 @@ trait ActorRefProvider {
   def deadLetters: ActorRef
 
   /**
-   * Reference to the death watch service.
-   */
-  def deathWatch: DeathWatch
-
-  /**
    * The root path for all actors within this actor system, including remote
    * address if enabled.
    */
   def rootPath: ActorPath
 
+  /**
+   * The Settings associated with this ActorRefProvider
+   */
   def settings: ActorSystem.Settings
 
+  //FIXME WHY IS THIS HERE?
   def dispatcher: MessageDispatcher
 
   /**
@@ -61,8 +61,12 @@ trait ActorRefProvider {
    */
   def init(system: ActorSystemImpl): Unit
 
+  /**
+   * The Deployer associated with this ActorRefProvider
+   */
   def deployer: Deployer
 
+  //FIXME WHY IS THIS HERE?
   def scheduler: Scheduler
 
   /**
@@ -101,7 +105,8 @@ trait ActorRefProvider {
     path: ActorPath,
     systemService: Boolean,
     deploy: Option[Deploy],
-    lookupDeploy: Boolean): InternalActorRef
+    lookupDeploy: Boolean,
+    async: Boolean): InternalActorRef
 
   /**
    * Create actor reference for a specified local or remote path. If no such
@@ -131,6 +136,7 @@ trait ActorRefProvider {
    */
   def terminationFuture: Future[Unit]
 
+  //FIXME I PROPOSE TO REMOVE THIS IN 2.1 - √
   /**
    * Obtain the address which is to be used within sender references when
    * sending to the given other address or none if the other address cannot be
@@ -141,22 +147,34 @@ trait ActorRefProvider {
 }
 
 /**
- * Interface implemented by ActorSystem and AkkaContext, the only two places
+ * Interface implemented by ActorSystem and ActorContext, the only two places
  * from which you can get fresh actors.
  */
 trait ActorRefFactory {
-
+  /**
+   * INTERNAL USE ONLY
+   */
   protected def systemImpl: ActorSystemImpl
-
+  /**
+   * INTERNAL USE ONLY
+   */
   protected def provider: ActorRefProvider
 
-  protected def dispatcher: MessageDispatcher
+  /**
+   * Returns the default MessageDispatcher associated with this ActorRefFactory
+   */
+  implicit def dispatcher: MessageDispatcher
 
   /**
    * Father of all children created by this interface.
+   *
+   * INTERNAL USE ONLY
    */
   protected def guardian: InternalActorRef
 
+  /**
+   * INTERNAL USE ONLY
+   */
   protected def lookupRoot: InternalActorRef
 
   /**
@@ -276,8 +294,6 @@ trait ActorRefFactory {
   def stop(actor: ActorRef): Unit
 }
 
-class ActorRefProviderException(message: String) extends AkkaException(message)
-
 /**
  * Internal Akka use only, used in implementation of system.actorOf.
  */
@@ -298,10 +314,10 @@ private[akka] case class StopChild(child: ActorRef)
  */
 class LocalActorRefProvider(
   _systemName: String,
-  val settings: ActorSystem.Settings,
+  override val settings: ActorSystem.Settings,
   val eventStream: EventStream,
-  val scheduler: Scheduler,
-  val deployer: Deployer) extends ActorRefProvider {
+  override val scheduler: Scheduler,
+  override val deployer: Deployer) extends ActorRefProvider {
 
   // this is the constructor needed for reflectively instantiating the provider
   def this(_systemName: String,
@@ -315,13 +331,11 @@ class LocalActorRefProvider(
       scheduler,
       new Deployer(settings, dynamicAccess))
 
-  val rootPath: ActorPath = RootActorPath(Address("akka", _systemName))
+  override val rootPath: ActorPath = RootActorPath(Address("akka", _systemName))
 
-  val log = Logging(eventStream, "LocalActorRefProvider(" + rootPath.address + ")")
+  private[akka] val log: LoggingAdapter = Logging(eventStream, "LocalActorRefProvider(" + rootPath.address + ")")
 
-  val deadLetters = new DeadLetterActorRef(this, rootPath / "deadLetters", eventStream)
-
-  val deathWatch = new LocalDeathWatch(1024) //TODO make configrable
+  override val deadLetters: InternalActorRef = new DeadLetterActorRef(this, rootPath / "deadLetters", eventStream)
 
   /*
    * generate name for temporary actor refs
@@ -332,7 +346,7 @@ class LocalActorRefProvider(
 
   private val tempNode = rootPath / "temp"
 
-  def tempPath() = tempNode / tempName()
+  override def tempPath(): ActorPath = tempNode / tempName()
 
   /**
    * Top-level anchor for the supervision hierarchy of this actor system. Will
@@ -348,11 +362,9 @@ class LocalActorRefProvider(
 
     def provider: ActorRefProvider = LocalActorRefProvider.this
 
-    override def stop() = stopped switchOn {
-      terminationFuture.complete(causeOfTermination.toLeft(()))
-    }
+    override def stop(): Unit = stopped switchOn { terminationPromise.complete(causeOfTermination.toLeft(())) }
 
-    override def isTerminated = stopped.isOn
+    override def isTerminated: Boolean = stopped.isOn
 
     override def !(message: Any)(implicit sender: ActorRef = null): Unit = stopped.ifOff(message match {
       case Failed(ex) if sender ne null ⇒ causeOfTermination = Some(ex); sender.asInstanceOf[InternalActorRef].stop()
@@ -361,9 +373,9 @@ class LocalActorRefProvider(
 
     override def sendSystemMessage(message: SystemMessage): Unit = stopped ifOff {
       message match {
-        case Supervise(child)       ⇒ // TODO register child in some map to keep track of it and enable shutdown after all dead
-        case ChildTerminated(child) ⇒ stop()
-        case _                      ⇒ log.error(this + " received unexpected system message [" + message + "]")
+        case Supervise(_)       ⇒ // TODO register child in some map to keep track of it and enable shutdown after all dead
+        case ChildTerminated(_) ⇒ stop()
+        case _                  ⇒ log.error(this + " received unexpected system message [" + message + "]")
       }
     }
   }
@@ -371,7 +383,7 @@ class LocalActorRefProvider(
   /**
    * Overridable supervision strategy to be used by the “/user” guardian.
    */
-  protected def guardianSupervisionStrategy = {
+  protected def guardianSupervisionStrategy: SupervisorStrategy = {
     import akka.actor.SupervisorStrategy._
     OneForOneStrategy() {
       case _: ActorKilledException         ⇒ Stop
@@ -387,12 +399,12 @@ class LocalActorRefProvider(
    */
   private class Guardian extends Actor {
 
-    override val supervisorStrategy = guardianSupervisionStrategy
+    override val supervisorStrategy: SupervisorStrategy = guardianSupervisionStrategy
 
     def receive = {
       case Terminated(_)                ⇒ context.stop(self)
-      case CreateChild(child, name)     ⇒ sender ! (try context.actorOf(child, name) catch { case e: Exception ⇒ e })
-      case CreateRandomNameChild(child) ⇒ sender ! (try context.actorOf(child) catch { case e: Exception ⇒ e })
+      case CreateChild(child, name)     ⇒ sender ! (try context.actorOf(child, name) catch { case NonFatal(e) ⇒ Status.Failure(e) })
+      case CreateRandomNameChild(child) ⇒ sender ! (try context.actorOf(child) catch { case NonFatal(e) ⇒ Status.Failure(e) })
       case StopChild(child)             ⇒ context.stop(child); sender ! "ok"
       case m                            ⇒ deadLetters ! DeadLetter(m, sender, self)
     }
@@ -404,12 +416,11 @@ class LocalActorRefProvider(
   /**
    * Overridable supervision strategy to be used by the “/system” guardian.
    */
-  protected def systemGuardianSupervisionStrategy = {
+  protected def systemGuardianSupervisionStrategy: SupervisorStrategy = {
     import akka.actor.SupervisorStrategy._
     OneForOneStrategy() {
-      case _: ActorKilledException         ⇒ Stop
-      case _: ActorInitializationException ⇒ Stop
-      case _: Exception                    ⇒ Restart
+      case _: ActorKilledException | _: ActorInitializationException ⇒ Stop
+      case _: Exception ⇒ Restart
     }
   }
 
@@ -420,14 +431,12 @@ class LocalActorRefProvider(
    */
   private class SystemGuardian extends Actor {
 
-    override val supervisorStrategy = systemGuardianSupervisionStrategy
+    override val supervisorStrategy: SupervisorStrategy = systemGuardianSupervisionStrategy
 
     def receive = {
-      case Terminated(_) ⇒
-        eventStream.stopDefaultLoggers()
-        context.stop(self)
-      case CreateChild(child, name)     ⇒ sender ! (try context.actorOf(child, name) catch { case e: Exception ⇒ e })
-      case CreateRandomNameChild(child) ⇒ sender ! (try context.actorOf(child) catch { case e: Exception ⇒ e })
+      case Terminated(_)                ⇒ eventStream.stopDefaultLoggers(); context.stop(self)
+      case CreateChild(child, name)     ⇒ sender ! (try context.actorOf(child, name) catch { case NonFatal(e) ⇒ Status.Failure(e) })
+      case CreateRandomNameChild(child) ⇒ sender ! (try context.actorOf(child) catch { case NonFatal(e) ⇒ Status.Failure(e) })
       case StopChild(child)             ⇒ context.stop(child); sender ! "ok"
       case m                            ⇒ deadLetters ! DeadLetter(m, sender, self)
     }
@@ -448,7 +457,9 @@ class LocalActorRefProvider(
 
   def dispatcher: MessageDispatcher = system.dispatcher
 
-  lazy val terminationFuture: Promise[Unit] = Promise[Unit]()(dispatcher)
+  lazy val terminationPromise: Promise[Unit] = Promise[Unit]()
+
+  def terminationFuture: Future[Unit] = terminationPromise.future
 
   @volatile
   private var extraNames: Map[String, InternalActorRef] = Map()
@@ -464,27 +475,18 @@ class LocalActorRefProvider(
   private val guardianProps = Props(new Guardian)
 
   lazy val rootGuardian: InternalActorRef =
-    new LocalActorRef(system, guardianProps, theOneWhoWalksTheBubblesOfSpaceTime, rootPath, true) {
-      object Extra {
-        def unapply(s: String): Option[InternalActorRef] = extraNames.get(s)
-      }
-
+    new LocalActorRef(system, guardianProps, theOneWhoWalksTheBubblesOfSpaceTime, rootPath) {
       override def getParent: InternalActorRef = this
-
-      override def getSingleChild(name: String): InternalActorRef = {
-        name match {
-          case "temp"   ⇒ tempContainer
-          case Extra(e) ⇒ e
-          case _        ⇒ super.getSingleChild(name)
-        }
+      override def getSingleChild(name: String): InternalActorRef = name match {
+        case "temp" ⇒ tempContainer
+        case other  ⇒ extraNames.get(other).getOrElse(super.getSingleChild(other))
       }
     }
 
-  lazy val guardian: InternalActorRef =
-    actorOf(system, guardianProps, rootGuardian, rootPath / "user", true, None, false)
+  lazy val guardian: LocalActorRef = new LocalActorRef(system, guardianProps, rootGuardian, rootPath / "user")
 
-  lazy val systemGuardian: InternalActorRef =
-    actorOf(system, guardianProps.withCreator(new SystemGuardian), rootGuardian, rootPath / "system", true, None, false)
+  lazy val systemGuardian: LocalActorRef =
+    new LocalActorRef(system, guardianProps.withCreator(new SystemGuardian), rootGuardian, rootPath / "system")
 
   lazy val tempContainer = new VirtualPathContainer(system.provider, tempNode, rootGuardian, log)
 
@@ -501,8 +503,8 @@ class LocalActorRefProvider(
   def init(_system: ActorSystemImpl) {
     system = _system
     // chain death watchers so that killing guardian stops the application
-    deathWatch.subscribe(systemGuardian, guardian)
-    deathWatch.subscribe(rootGuardian, systemGuardian)
+    systemGuardian.sendSystemMessage(Watch(guardian, systemGuardian))
+    rootGuardian.sendSystemMessage(Watch(systemGuardian, rootGuardian))
     eventStream.startDefaultLoggers(_system)
   }
 
@@ -515,55 +517,46 @@ class LocalActorRefProvider(
       else actorFor(ref, elems)
     case ActorPathExtractor(address, elems) if address == rootPath.address ⇒ actorFor(rootGuardian, elems)
     case _ ⇒
-      log.warning("look-up of unknown path [{}] failed", path)
+      log.debug("look-up of unknown path [{}] failed", path)
       deadLetters
   }
 
   def actorFor(path: ActorPath): InternalActorRef =
     if (path.root == rootPath) actorFor(rootGuardian, path.elements)
     else {
-      log.warning("look-up of foreign ActorPath [{}] failed", path)
+      log.debug("look-up of foreign ActorPath [{}] failed", path)
       deadLetters
     }
 
   def actorFor(ref: InternalActorRef, path: Iterable[String]): InternalActorRef =
     if (path.isEmpty) {
-      log.warning("look-up of empty path sequence fails (per definition)")
+      log.debug("look-up of empty path sequence fails (per definition)")
       deadLetters
     } else ref.getChild(path.iterator) match {
       case Nobody ⇒
-        log.warning("look-up of path sequence [/{}] failed", path.mkString("/"))
+        log.debug("look-up of path sequence [/{}] failed", path.mkString("/"))
         new EmptyLocalActorRef(system.provider, ref.path / path, eventStream)
       case x ⇒ x
     }
 
   def actorOf(system: ActorSystemImpl, props: Props, supervisor: InternalActorRef, path: ActorPath,
-              systemService: Boolean, deploy: Option[Deploy], lookupDeploy: Boolean): InternalActorRef = {
+              systemService: Boolean, deploy: Option[Deploy], lookupDeploy: Boolean, async: Boolean): InternalActorRef = {
     props.routerConfig match {
-      case NoRouter ⇒ new LocalActorRef(system, props, supervisor, path, systemService) // create a local actor
+      case NoRouter ⇒
+        if (settings.DebugRouterMisconfiguration && deployer.lookup(path).isDefined)
+          log.warning("Configuration says that {} should be a router, but code disagrees. Remove the config or add a routerConfig to its Props.")
+
+        if (async) new RepointableActorRef(system, props, supervisor, path).initialize()
+        else new LocalActorRef(system, props, supervisor, path)
       case router ⇒
-        val lookup = if (lookupDeploy) deployer.lookup(path.elements.drop(1).mkString("/", "/", "")) else None
+        val lookup = if (lookupDeploy) deployer.lookup(path) else None
         val fromProps = Iterator(props.deploy.copy(routerConfig = props.deploy.routerConfig withFallback router))
         val d = fromProps ++ deploy.iterator ++ lookup.iterator reduce ((a, b) ⇒ b withFallback a)
-        new RoutedActorRef(system, props.withRouter(d.routerConfig), supervisor, path)
+        val ref = new RoutedActorRef(system, props.withRouter(d.routerConfig), supervisor, path).initialize()
+        if (async) ref else ref.activate()
     }
   }
 
   def getExternalAddressFor(addr: Address): Option[Address] = if (addr == rootPath.address) Some(addr) else None
-}
-
-class LocalDeathWatch(val mapSize: Int) extends DeathWatch with ActorClassification {
-
-  override def publish(event: Event): Unit = {
-    val monitors = dissociate(classify(event))
-    if (monitors.nonEmpty) monitors.foreach(_ ! event)
-  }
-
-  override def subscribe(subscriber: Subscriber, to: Classifier): Boolean = {
-    if (!super.subscribe(subscriber, to)) {
-      subscriber ! Terminated(to)
-      false
-    } else true
-  }
 }
 

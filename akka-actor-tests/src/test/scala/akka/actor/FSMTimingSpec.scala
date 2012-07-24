@@ -4,9 +4,11 @@
 
 package akka.actor
 
+import language.postfixOps
+
 import akka.testkit._
-import akka.util.Duration
-import akka.util.duration._
+import scala.concurrent.util.Duration
+import scala.concurrent.util.duration._
 import akka.event.Logging
 
 @org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
@@ -67,6 +69,18 @@ class FSMTimingSpec extends AkkaSpec with ImplicitSender {
       }
     }
 
+    "resubmit single-shot timer" taggedAs TimingTest in {
+      within(2 seconds) {
+        within(500 millis, 1.5 second) {
+          fsm ! TestSingleTimerResubmit
+          expectMsg(Tick)
+          expectMsg(Tock)
+          expectMsg(Transition(fsm, TestSingleTimerResubmit, Initial))
+        }
+        expectNoMsg
+      }
+    }
+
     "correctly cancel a named timer" taggedAs TimingTest in {
       fsm ! TestCancelTimer
       within(500 millis) {
@@ -106,8 +120,8 @@ class FSMTimingSpec extends AkkaSpec with ImplicitSender {
     }
 
     "notify unhandled messages" taggedAs TimingTest in {
-      filterEvents(EventFilter.warning("unhandled event Tick in state TestUnhandled", source = fsm.toString, occurrences = 1),
-        EventFilter.warning("unhandled event Unhandled(test) in state TestUnhandled", source = fsm.toString, occurrences = 1)) {
+      filterEvents(EventFilter.warning("unhandled event Tick in state TestUnhandled", source = fsm.path.toString, occurrences = 1),
+        EventFilter.warning("unhandled event Unhandled(test) in state TestUnhandled", source = fsm.path.toString, occurrences = 1)) {
           fsm ! TestUnhandled
           within(1 second) {
             fsm ! Tick
@@ -128,13 +142,13 @@ class FSMTimingSpec extends AkkaSpec with ImplicitSender {
 object FSMTimingSpec {
 
   def suspend(actorRef: ActorRef): Unit = actorRef match {
-    case l: LocalActorRef ⇒ l.suspend()
-    case _                ⇒
+    case l: ActorRefWithCell ⇒ l.suspend()
+    case _                   ⇒
   }
 
   def resume(actorRef: ActorRef): Unit = actorRef match {
-    case l: LocalActorRef ⇒ l.resume()
-    case _                ⇒
+    case l: ActorRefWithCell ⇒ l.resume(inResponseToFailure = false)
+    case _                   ⇒
   }
 
   trait State
@@ -142,6 +156,7 @@ object FSMTimingSpec {
   case object TestStateTimeout extends State
   case object TestStateTimeoutOverride extends State
   case object TestSingleTimer extends State
+  case object TestSingleTimerResubmit extends State
   case object TestRepeatedTimer extends State
   case object TestUnhandled extends State
   case object TestCancelTimer extends State
@@ -178,6 +193,13 @@ object FSMTimingSpec {
       case Event(Tick, _) ⇒
         tester ! Tick
         goto(Initial)
+    }
+    onTransition {
+      case Initial -> TestSingleTimerResubmit ⇒ setTimer("blah", Tick, 500 millis, false)
+    }
+    when(TestSingleTimerResubmit) {
+      case Event(Tick, _) ⇒ tester ! Tick; setTimer("blah", Tock, 500 millis, false)
+      case Event(Tock, _) ⇒ tester ! Tock; goto(Initial)
     }
     when(TestCancelTimer) {
       case Event(Tick, _) ⇒

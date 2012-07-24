@@ -4,8 +4,9 @@
 
 package akka.camel;
 
+import akka.actor.Status;
 import akka.camel.javaapi.UntypedConsumerActor;
-import akka.util.Duration;
+import scala.concurrent.util.Duration;
 import org.apache.camel.builder.Builder;
 import org.apache.camel.model.ProcessorDefinition;
 import org.apache.camel.model.RouteDefinition;
@@ -41,7 +42,7 @@ public class SampleErrorHandlingConsumer extends UntypedConsumerActor {
 
     @Override
     public void preRestart(Throwable reason, Option<Object> message){
-        getSender().tell(new Failure(reason));
+        getSender().tell(new Status.Failure(reason));
     }
 
 }

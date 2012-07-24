@@ -4,10 +4,13 @@
 
 package akka.actor
 
+import language.existentials
+
 import akka.dispatch._
 import akka.japi.Creator
-import collection.immutable.Stack
+import scala.reflect.ClassTag
 import akka.routing._
+import akka.util.Reflect
 
 /**
  * Factory for Props instances.
@@ -18,12 +21,24 @@ import akka.routing._
  */
 object Props {
 
+  /**
+   * The defaultCreator, simply throws an UnsupportedOperationException when applied, which is used when creating a Props
+   */
   final val defaultCreator: () ⇒ Actor = () ⇒ throw new UnsupportedOperationException("No actor creator specified!")
 
+  /**
+   * The defaultRoutedProps is NoRouter which is used when creating a Props
+   */
   final val defaultRoutedProps: RouterConfig = NoRouter
 
+  /**
+   * The default Deploy instance which is used when creating a Props
+   */
   final val defaultDeploy = Deploy()
 
+  /**
+   * A Props instance whose creator will create an actor that doesn't respond to any message
+   */
   final val empty = new Props(() ⇒ new Actor { def receive = Actor.emptyBehavior })
 
   /**
@@ -32,25 +47,19 @@ object Props {
   final val default = new Props()
 
   /**
-   * Returns a cached default implementation of Props.
-   */
-  def apply(): Props = default
-
-  /**
    * Returns a Props that has default values except for "creator" which will be a function that creates an instance
    * of the supplied type using the default constructor.
    *
    * Scala API.
    */
-  def apply[T <: Actor: ClassManifest]: Props =
-    default.withCreator(implicitly[ClassManifest[T]].erasure.asInstanceOf[Class[_ <: Actor]].newInstance)
+  def apply[T <: Actor: ClassTag](): Props =
+    default.withCreator(implicitly[ClassTag[T]].runtimeClass.asInstanceOf[Class[_ <: Actor]])
 
   /**
    * Returns a Props that has default values except for "creator" which will be a function that creates an instance
    * of the supplied class using the default constructor.
    */
-  def apply(actorClass: Class[_ <: Actor]): Props =
-    default.withCreator(actorClass.newInstance)
+  def apply(actorClass: Class[_ <: Actor]): Props = default.withCreator(actorClass)
 
   /**
    * Returns a Props that has default values except for "creator" which will be a function that creates an instance
@@ -58,24 +67,25 @@ object Props {
    *
    * Scala API.
    */
-  def apply(creator: ⇒ Actor): Props =
-    default.withCreator(creator)
+  def apply(creator: ⇒ Actor): Props = default.withCreator(creator)
 
   /**
    * Returns a Props that has default values except for "creator" which will be a function that creates an instance
    * using the supplied thunk.
    */
-  def apply(creator: Creator[_ <: Actor]): Props =
-    default.withCreator(creator.create)
+  def apply(creator: Creator[_ <: Actor]): Props = default.withCreator(creator.create)
 
-  def apply(behavior: ActorContext ⇒ Actor.Receive): Props =
-    apply(new Actor { def receive = behavior(context) })
-
+  /**
+   * Returns a new Props whose creator will instantiate an Actor that has the behavior specified
+   */
+  def apply(behavior: ActorContext ⇒ Actor.Receive): Props = apply(new Actor { def receive = behavior(context) })
 }
 
 /**
  * Props is a ActorRef configuration object, that is thread safe and fully sharable.
  * Used when creating new actors through; <code>ActorSystem.actorOf</code> and <code>ActorContext.actorOf</code>.
+ *
+ * In case of providing code which creates the actual Actor instance, that must not return the same instance multiple times.
  *
  * Examples on Scala API:
  * {{{
@@ -128,12 +138,14 @@ case class Props(
    * Java API.
    */
   def this(actorClass: Class[_ <: Actor]) = this(
-    creator = () ⇒ actorClass.newInstance,
+    creator = FromClassCreator(actorClass),
     dispatcher = Dispatchers.DefaultDispatcherId,
     routerConfig = Props.defaultRoutedProps)
 
   /**
    * Returns a new Props with the specified creator set.
+   *
+   * The creator must not return the same instance multiple times.
    *
    * Scala API.
    */
@@ -141,6 +153,8 @@ case class Props(
 
   /**
    * Returns a new Props with the specified creator set.
+   *
+   * The creator must not return the same instance multiple times.
    *
    * Java API.
    */
@@ -151,7 +165,7 @@ case class Props(
    *
    * Java API.
    */
-  def withCreator(c: Class[_ <: Actor]): Props = copy(creator = () ⇒ c.newInstance)
+  def withCreator(c: Class[_ <: Actor]): Props = copy(creator = FromClassCreator(c))
 
   /**
    * Returns a new Props with the specified dispatcher set.
@@ -167,4 +181,13 @@ case class Props(
    * Returns a new Props with the specified deployment configuration.
    */
   def withDeploy(d: Deploy): Props = copy(deploy = d)
+
+}
+
+/**
+ * Used when creating an Actor from a class. Special Function0 to be
+ * able to optimize serialization.
+ */
+private[akka] case class FromClassCreator(clazz: Class[_ <: Actor]) extends Function0[Actor] {
+  def apply(): Actor = Reflect.instantiate(clazz)
 }

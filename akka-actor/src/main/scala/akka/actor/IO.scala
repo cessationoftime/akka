@@ -1,9 +1,14 @@
 /**
- * Copyright (C) 2009-2011 Scalable Solutions AB <http://scalablesolutions.se>
+ * Copyright (C) 2009-2012 Typesafe Inc. <http://www.typesafe.com>
  */
 package akka.actor
 
-import akka.dispatch.{ Future, ExecutionContext }
+import language.higherKinds
+import language.postfixOps
+
+import scala.concurrent.{ ExecutionContext, Future }
+import scala.concurrent.util.Duration
+import scala.util.control.NonFatal
 import akka.util.ByteString
 import java.net.{ SocketAddress, InetSocketAddress }
 import java.io.IOException
@@ -21,8 +26,7 @@ import java.nio.channels.{
 import scala.collection.mutable
 import scala.annotation.tailrec
 import scala.collection.generic.CanBuildFrom
-import com.eaio.uuid.UUID
-
+import java.util.UUID
 /**
  * IO messages and iteratees.
  *
@@ -31,7 +35,7 @@ import com.eaio.uuid.UUID
  */
 object IO {
 
-  final class DivergentIterateeException extends Exception("Iteratees should not return a continuation when receiving EOF")
+  final class DivergentIterateeException extends IllegalStateException("Iteratees should not return a continuation when receiving EOF")
 
   /**
    * An immutable handle to a Java NIO Channel. Contains a reference to the
@@ -65,14 +69,14 @@ object IO {
    * A [[akka.actor.IO.Handle]] to a ReadableByteChannel.
    */
   sealed trait ReadHandle extends Handle with Product {
-    override def asReadable = this
+    override def asReadable: ReadHandle = this
   }
 
   /**
    * A [[akka.actor.IO.Handle]] to a WritableByteChannel.
    */
   sealed trait WriteHandle extends Handle with Product {
-    override def asWritable = this
+    override def asWritable: WriteHandle = this
 
     /**
      * Sends a request to the [[akka.actor.IOManager]] to write to the
@@ -89,16 +93,16 @@ object IO {
    * created by [[akka.actor.IOManager]].connect() and
    * [[akka.actor.IO.ServerHandle]].accept().
    */
-  case class SocketHandle(owner: ActorRef, ioManager: ActorRef, uuid: UUID = new UUID()) extends ReadHandle with WriteHandle {
-    override def asSocket = this
+  case class SocketHandle(owner: ActorRef, ioManager: ActorRef, uuid: UUID = UUID.randomUUID()) extends ReadHandle with WriteHandle {
+    override def asSocket: SocketHandle = this
   }
 
   /**
    * A [[akka.actor.IO.Handle]] to a ServerSocketChannel. Instances are
    * normally created by [[akka.actor.IOManager]].listen().
    */
-  case class ServerHandle(owner: ActorRef, ioManager: ActorRef, uuid: UUID = new UUID()) extends Handle {
-    override def asServer = this
+  case class ServerHandle(owner: ActorRef, ioManager: ActorRef, uuid: UUID = UUID.randomUUID()) extends Handle {
+    override def asServer: ServerHandle = this
 
     /**
      * Sends a request to the [[akka.actor.IOManager]] to accept an incoming
@@ -108,17 +112,120 @@ object IO {
      * This can also be performed by creating a new [[akka.actor.IO.SocketHandle]]
      * and sending it within an [[akka.actor.IO.Accept]] to the [[akka.actor.IOManager]].
      *
+     * @param options Seq of [[akka.actor.IO.SocketOptions]] to set on accepted socket
      * @param socketOwner the [[akka.actor.ActorRef]] that should receive events
      *                    associated with the SocketChannel. The ActorRef for the
      *                    current Actor will be used implicitly.
      * @return a new SocketHandle that can be used to perform actions on the
      *         new connection's SocketChannel.
      */
-    def accept()(implicit socketOwner: ActorRef): SocketHandle = {
+    def accept(options: Seq[SocketOption] = Seq.empty)(implicit socketOwner: ActorRef): SocketHandle = {
       val socket = SocketHandle(socketOwner, ioManager)
-      ioManager ! Accept(socket, this)
+      ioManager ! Accept(socket, this, options)
       socket
     }
+  }
+
+  /**
+   * Options to be set when setting up a [[akka.actor.IO.SocketHandle]]
+   */
+  sealed trait SocketOption
+
+  /**
+   * Options to be set when setting up a [[akka.actor.IO.ServerHandle]]
+   */
+  sealed trait ServerSocketOption
+
+  /**
+   * [[akka.actor.IO.SocketOption]] to enable or disable SO_KEEPALIVE
+   *
+   * For more information see [[java.net.Socket#setKeepAlive]]
+   */
+  case class KeepAlive(on: Boolean) extends SocketOption
+
+  /**
+   * [[akka.actor.IO.SocketOption]] to enable or disable OOBINLINE (receipt
+   * of TCP urgent data) By default, this option is disabled and TCP urgent
+   * data received on a [[akka.actor.IO.SocketHandle]] is silently discarded.
+   *
+   * For more information see [[java.net.Socket#setOOBInline]]
+   */
+  case class OOBInline(on: Boolean) extends SocketOption
+
+  /**
+   * [[akka.actor.IO.SocketOption]] to set performance preferences for this
+   * [[akka.actor.IO.SocketHandle]].
+   *
+   * For more information see [[java.net.Socket#setPerformancePreferences]]
+   */
+  case class PerformancePreferences(connectionTime: Int, latency: Int, bandwidth: Int) extends SocketOption with ServerSocketOption
+
+  /**
+   * [[akka.actor.IO.SocketOption]] to set the SO_RCVBUF option for this
+   * [[akka.actor.IO.SocketHandle]].
+   *
+   * For more information see [[java.net.Socket#setReceiveBufferSize]]
+   */
+  case class ReceiveBufferSize(size: Int) extends SocketOption with ServerSocketOption {
+    require(size > 0, "Receive buffer size must be greater than 0")
+  }
+
+  /**
+   * [[akka.actor.IO.SocketOption]] to enable or disable SO_REUSEADDR
+   *
+   * For more information see [[java.net.Socket#setReuseAddress]]
+   */
+  case class ReuseAddress(on: Boolean) extends SocketOption with ServerSocketOption
+
+  /**
+   * [[akka.actor.IO.SocketOption]] to set the SO_SNDBUF option for this
+   * [[akka.actor.IO.SocketHandle]].
+   *
+   * For more information see [[java.net.Socket#setSendBufferSize]]
+   */
+  case class SendBufferSize(size: Int) extends SocketOption {
+    require(size > 0, "Send buffer size must be greater than 0")
+  }
+
+  /**
+   * [[akka.actor.IO.SocketOption]] to enable or disable SO_LINGER with the
+   * specified linger time in seconds.
+   *
+   * For more information see [[java.net.Socket#setSoLinger]]
+   */
+  case class SoLinger(linger: Option[Int]) extends SocketOption {
+    if (linger.isDefined) require(linger.get >= 0, "linger must not be negative if on")
+  }
+
+  /**
+   * [[akka.actor.IO.SocketOption]] to set SO_TIMEOUT to the specified
+   * timeout rounded down to the nearest millisecond. A timeout of
+   * zero is treated as infinant.
+   *
+   * For more information see [[java.net.Socket#setSoTimeout]]
+   */
+  case class SoTimeout(timeout: Duration) extends SocketOption {
+    require(timeout.toMillis >= 0, "SoTimeout must be >= 0ms")
+  }
+
+  /**
+   * [[akka.actor.IO.SocketOption]] to enable or disable TCP_NODELAY
+   * (disable or enable Nagle's algorithm)
+   *
+   * For more information see [[java.net.Socket#setTcpNoDelay]]
+   */
+  case class TcpNoDelay(on: Boolean) extends SocketOption
+
+  /**
+   * [[akka.actor.IO.SocketOption]] to set the traffic class or
+   * type-of-service octet in the IP header for packets sent from this
+   * [[akka.actor.IO.SocketHandle]].
+   *
+   * For more information see [[java.net.Socket#setTrafficClass]]
+   */
+  case class TrafficClass(tc: Int) extends SocketOption {
+    require(tc >= 0, "Traffic class must be >= 0")
+    require(tc <= 255, "Traffic class must be <= 255")
   }
 
   /**
@@ -128,11 +235,12 @@ object IO {
 
   /**
    * Message to an [[akka.actor.IOManager]] to create a ServerSocketChannel
-   * listening on the provided address.
+   * listening on the provided address with the given
+   * [[akka.actor.IO.ServerSocketOption]]s.
    *
    * Normally sent using IOManager.listen()
    */
-  case class Listen(server: ServerHandle, address: SocketAddress) extends IOMessage
+  case class Listen(server: ServerHandle, address: SocketAddress, options: Seq[ServerSocketOption] = Seq.empty) extends IOMessage
 
   /**
    * Message from an [[akka.actor.IOManager]] that the ServerSocketChannel is
@@ -149,19 +257,20 @@ object IO {
   case class NewClient(server: ServerHandle) extends IOMessage
 
   /**
-   * Message to an [[akka.actor.IOManager]] to accept a new connection.
+   * Message to an [[akka.actor.IOManager]] to accept a new connection with the
+   * given [[akka.actor.IO.SocketOption]]s.
    *
    * Normally sent using [[akka.actor.IO.ServerHandle]].accept()
    */
-  case class Accept(socket: SocketHandle, server: ServerHandle) extends IOMessage
+  case class Accept(socket: SocketHandle, server: ServerHandle, options: Seq[SocketOption] = Seq.empty) extends IOMessage
 
   /**
    * Message to an [[akka.actor.IOManager]] to create a SocketChannel connected
-   * to the provided address.
+   * to the provided address with the given [[akka.actor.IO.SocketOption]]s.
    *
    * Normally sent using IOManager.connect()
    */
-  case class Connect(socket: SocketHandle, address: SocketAddress) extends IOMessage
+  case class Connect(socket: SocketHandle, address: SocketAddress, options: Seq[SocketOption] = Seq.empty) extends IOMessage
 
   /**
    * Message from an [[akka.actor.IOManager]] that the SocketChannel has
@@ -216,16 +325,18 @@ object IO {
   }
 
   object Chunk {
-    val empty = Chunk(ByteString.empty)
+    val empty: Chunk = new Chunk(ByteString.empty)
   }
 
   /**
    * Part of an [[akka.actor.IO.Input]] stream that contains a chunk of bytes.
    */
   case class Chunk(bytes: ByteString) extends Input {
-    def ++(that: Input) = that match {
-      case Chunk(more) ⇒ Chunk(bytes ++ more)
-      case _: EOF      ⇒ that
+    final override def ++(that: Input): Input = that match {
+      case Chunk(more) if more.isEmpty ⇒ this
+      case c: Chunk if bytes.isEmpty   ⇒ c
+      case Chunk(more)                 ⇒ Chunk(bytes ++ more)
+      case _: EOF                      ⇒ that
     }
   }
 
@@ -238,7 +349,7 @@ object IO {
    * Iteratee.recover() in order to handle it properly.
    */
   case class EOF(cause: Option[Exception]) extends Input {
-    def ++(that: Input) = that
+    final override def ++(that: Input): Input = that
   }
 
   object Iteratee {
@@ -248,7 +359,15 @@ object IO {
      * inferred as an Iteratee and not as a Done.
      */
     def apply[A](value: A): Iteratee[A] = Done(value)
+
+    /**
+     * Returns Iteratee.unit
+     */
     def apply(): Iteratee[Unit] = unit
+
+    /**
+     * The single value representing Done(())
+     */
     val unit: Iteratee[Unit] = Done(())
   }
 
@@ -341,6 +460,7 @@ object IO {
    */
   final case class Cont[+A](f: Input ⇒ (Iteratee[A], Input), error: Option[Exception] = None) extends Iteratee[A]
 
+  //FIXME general description of what an IterateeRef is and how it is used, potentially with link to docs
   object IterateeRef {
 
     /**
@@ -373,13 +493,14 @@ object IO {
      * 'refFactory' is used to provide the default value for new keys.
      */
     class Map[K, V] private (refFactory: ⇒ IterateeRef[V], underlying: mutable.Map[K, IterateeRef[V]] = mutable.Map.empty[K, IterateeRef[V]]) extends mutable.Map[K, IterateeRef[V]] {
-      def get(key: K) = Some(underlying.getOrElseUpdate(key, refFactory))
-      def iterator = underlying.iterator
-      def +=(kv: (K, IterateeRef[V])) = { underlying += kv; this }
-      def -=(key: K) = { underlying -= key; this }
+      override def get(key: K) = Some(underlying.getOrElseUpdate(key, refFactory))
+      override def iterator = underlying.iterator
+      override def +=(kv: (K, IterateeRef[V])) = { underlying += kv; this }
+      override def -=(key: K) = { underlying -= key; this }
       override def empty = new Map[K, V](refFactory)
     }
 
+    //FIXME general description of what an Map is and how it is used, potentially with link to docs
     object Map {
       /**
        * Uses a factory to create the initial IterateeRef for each new key.
@@ -396,7 +517,6 @@ object IO {
        */
       def async[K]()(implicit executor: ExecutionContext): IterateeRef.Map[K, Unit] = new Map(IterateeRef.async())
     }
-
   }
 
   /**
@@ -406,8 +526,11 @@ object IO {
    * for details.
    */
   trait IterateeRef[A] {
+    //FIXME Add docs
     def flatMap(f: A ⇒ Iteratee[A]): Unit
+    //FIXME Add docs
     def map(f: A ⇒ A): Unit
+    //FIXME Add docs
     def apply(input: Input): Unit
   }
 
@@ -424,12 +547,16 @@ object IO {
    */
   final class IterateeRefSync[A](initial: Iteratee[A]) extends IterateeRef[A] {
     private var _value: (Iteratee[A], Input) = (initial, Chunk.empty)
-    def flatMap(f: A ⇒ Iteratee[A]): Unit = _value = _value match {
+    override def flatMap(f: A ⇒ Iteratee[A]): Unit = _value = _value match {
       case (iter, chunk @ Chunk(bytes)) if bytes.nonEmpty ⇒ (iter flatMap f)(chunk)
       case (iter, input)                                  ⇒ (iter flatMap f, input)
     }
-    def map(f: A ⇒ A): Unit = _value = (_value._1 map f, _value._2)
-    def apply(input: Input): Unit = _value = _value._1(_value._2 ++ input)
+    override def map(f: A ⇒ A): Unit = _value = (_value._1 map f, _value._2)
+    override def apply(input: Input): Unit = _value = _value._1(_value._2 ++ input)
+
+    /**
+     * Returns the current value of this IterateeRefSync
+     */
     def value: (Iteratee[A], Input) = _value
   }
 
@@ -437,7 +564,7 @@ object IO {
    * A mutable reference to an [[akka.actor.IO.Iteratee]]. Not thread safe.
    *
    * Designed for use within an [[akka.actor.Actor]], although all actions
-   * perfomed on the Iteratee are processed within a [[akka.dispatch.Future]]
+   * perfomed on the Iteratee are processed within a [[scala.concurrent.Future]]
    * so it is not safe to refer to the Actor's state from within this Iteratee.
    * Messages should instead be sent to the Actor in order to modify state.
    *
@@ -449,12 +576,16 @@ object IO {
    */
   final class IterateeRefAsync[A](initial: Iteratee[A])(implicit executor: ExecutionContext) extends IterateeRef[A] {
     private var _value: Future[(Iteratee[A], Input)] = Future((initial, Chunk.empty))
-    def flatMap(f: A ⇒ Iteratee[A]): Unit = _value = _value map {
+    override def flatMap(f: A ⇒ Iteratee[A]): Unit = _value = _value map {
       case (iter, chunk @ Chunk(bytes)) if bytes.nonEmpty ⇒ (iter flatMap f)(chunk)
       case (iter, input)                                  ⇒ (iter flatMap f, input)
     }
-    def map(f: A ⇒ A): Unit = _value = _value map (v ⇒ (v._1 map f, v._2))
-    def apply(input: Input): Unit = _value = _value map (v ⇒ v._1(v._2 ++ input))
+    override def map(f: A ⇒ A): Unit = _value = _value map (v ⇒ (v._1 map f, v._2))
+    override def apply(input: Input): Unit = _value = _value map (v ⇒ v._1(v._2 ++ input))
+
+    /**
+     * Returns a Future which will hold the future value of this IterateeRefAsync
+     */
     def future: Future[(Iteratee[A], Input)] = _value
   }
 
@@ -598,10 +729,9 @@ object IO {
   /**
    * An Iteratee that continually repeats an Iteratee.
    *
-   * TODO: Should terminate on EOF
+   * FIXME TODO: Should terminate on EOF
    */
-  def repeat(iter: Iteratee[Unit]): Iteratee[Unit] =
-    iter flatMap (_ ⇒ repeat(iter))
+  def repeat(iter: Iteratee[Unit]): Iteratee[Unit] = iter flatMap (_ ⇒ repeat(iter))
 
   /**
    * An Iteratee that applies an Iteratee to each element of a Traversable
@@ -676,7 +806,7 @@ object IO {
  * An IOManager does not need to be manually stopped when not in use as it will
  * automatically enter an idle state when it has no channels to manage.
  */
-final class IOManager private (system: ActorSystem) extends Extension {
+final class IOManager private (system: ActorSystem) extends Extension { //FIXME how about taking an ActorContext
   /**
    * A reference to the [[akka.actor.IOManagerActor]] that performs the actual
    * IO. It communicates with other actors using subclasses of
@@ -691,13 +821,25 @@ final class IOManager private (system: ActorSystem) extends Extension {
    *
    * @param address the address to listen on
    * @param owner the ActorRef that will receive messages from the IOManagerActor
+   * @param option Seq of [[akka.actor.IO.ServerSocketOptions]] to setup on socket
    * @return a [[akka.actor.IO.ServerHandle]] to uniquely identify the created socket
    */
-  def listen(address: SocketAddress)(implicit owner: ActorRef): IO.ServerHandle = {
+  def listen(address: SocketAddress, options: Seq[IO.ServerSocketOption])(implicit owner: ActorRef): IO.ServerHandle = {
     val server = IO.ServerHandle(owner, actor)
-    actor ! IO.Listen(server, address)
+    actor ! IO.Listen(server, address, options)
     server
   }
+
+  /**
+   * Create a ServerSocketChannel listening on an address. Messages will be
+   * sent from the [[akka.actor.IOManagerActor]] to the owner
+   * [[akka.actor.ActorRef]].
+   *
+   * @param address the address to listen on
+   * @param owner the ActorRef that will receive messages from the IOManagerActor
+   * @return a [[akka.actor.IO.ServerHandle]] to uniquely identify the created socket
+   */
+  def listen(address: SocketAddress)(implicit owner: ActorRef): IO.ServerHandle = listen(address, Seq.empty)
 
   /**
    * Create a ServerSocketChannel listening on a host and port. Messages will
@@ -706,11 +848,12 @@ final class IOManager private (system: ActorSystem) extends Extension {
    *
    * @param host the hostname or IP to listen on
    * @param port the port to listen on
+   * @param options Seq of [[akka.actor.IO.ServerSocketOption]] to setup on socket
    * @param owner the ActorRef that will receive messages from the IOManagerActor
    * @return a [[akka.actor.IO.ServerHandle]] to uniquely identify the created socket
    */
-  def listen(host: String, port: Int)(implicit owner: ActorRef): IO.ServerHandle =
-    listen(new InetSocketAddress(host, port))(owner)
+  def listen(host: String, port: Int, options: Seq[IO.ServerSocketOption] = Seq.empty)(implicit owner: ActorRef): IO.ServerHandle =
+    listen(new InetSocketAddress(host, port), options)(owner)
 
   /**
    * Create a SocketChannel connecting to an address. Messages will be
@@ -718,12 +861,13 @@ final class IOManager private (system: ActorSystem) extends Extension {
    * [[akka.actor.ActorRef]].
    *
    * @param address the address to connect to
+   * @param options Seq of [[akka.actor.IO.SocketOption]] to setup on established socket
    * @param owner the ActorRef that will receive messages from the IOManagerActor
    * @return a [[akka.actor.IO.SocketHandle]] to uniquely identify the created socket
    */
-  def connect(address: SocketAddress)(implicit owner: ActorRef): IO.SocketHandle = {
+  def connect(address: SocketAddress, options: Seq[IO.SocketOption] = Seq.empty)(implicit owner: ActorRef): IO.SocketHandle = {
     val socket = IO.SocketHandle(owner, actor)
-    actor ! IO.Connect(socket, address)
+    actor ! IO.Connect(socket, address, options)
     socket
   }
 
@@ -734,6 +878,7 @@ final class IOManager private (system: ActorSystem) extends Extension {
    *
    * @param host the hostname or IP to connect to
    * @param port the port to connect to
+   * @param options Seq of [[akka.actor.IO.SocketOption]] to setup on established socket
    * @param owner the ActorRef that will receive messages from the IOManagerActor
    * @return a [[akka.actor.IO.SocketHandle]] to uniquely identify the created socket
    */
@@ -742,9 +887,10 @@ final class IOManager private (system: ActorSystem) extends Extension {
 
 }
 
+//FIXME add docs
 object IOManager extends ExtensionId[IOManager] with ExtensionIdProvider {
-  override def lookup = this
-  override def createExtension(system: ExtendedActorSystem) = new IOManager(system)
+  override def lookup: IOManager.type = this
+  override def createExtension(system: ExtendedActorSystem): IOManager = new IOManager(system)
 }
 
 /**
@@ -752,10 +898,10 @@ object IOManager extends ExtensionId[IOManager] with ExtensionIdProvider {
  *
  * Use [[akka.actor.IOManager]] to retrieve an instance of this Actor.
  */
-final class IOManagerActor extends Actor {
+final class IOManagerActor extends Actor with ActorLogging {
   import SelectionKey.{ OP_READ, OP_WRITE, OP_ACCEPT, OP_CONNECT }
 
-  private val bufferSize = 8192 // TODO: make buffer size configurable
+  private val bufferSize = 8192 // FIXME TODO: make configurable
 
   private type ReadChannel = ReadableByteChannel with SelectableChannel
   private type WriteChannel = WritableByteChannel with SelectableChannel
@@ -778,7 +924,7 @@ final class IOManagerActor extends Actor {
   private var lastSelect = 0
 
   /** force a select when lastSelect reaches this amount */
-  private val selectAt = 100
+  private val selectAt = 100 // FIXME TODO: make configurable
 
   /** true while the selector is open and channels.nonEmpty */
   private var running = false
@@ -828,32 +974,63 @@ final class IOManagerActor extends Actor {
     lastSelect = 0
   }
 
-  protected def receive = {
+  private def forwardFailure(f: ⇒ Unit): Unit = try f catch { case NonFatal(e) ⇒ sender ! Status.Failure(e) }
+
+  private def setSocketOptions(socket: java.net.Socket, options: Seq[IO.SocketOption]) {
+    options foreach {
+      case IO.KeepAlive(on)           ⇒ forwardFailure(socket.setKeepAlive(on))
+      case IO.OOBInline(on)           ⇒ forwardFailure(socket.setOOBInline(on))
+      case IO.ReceiveBufferSize(size) ⇒ forwardFailure(socket.setReceiveBufferSize(size))
+      case IO.ReuseAddress(on)        ⇒ forwardFailure(socket.setReuseAddress(on))
+      case IO.SendBufferSize(size)    ⇒ forwardFailure(socket.setSendBufferSize(size))
+      case IO.SoLinger(linger)        ⇒ forwardFailure(socket.setSoLinger(linger.isDefined, math.max(0, linger.getOrElse(socket.getSoLinger))))
+      case IO.SoTimeout(timeout)      ⇒ forwardFailure(socket.setSoTimeout(timeout.toMillis.toInt))
+      case IO.TcpNoDelay(on)          ⇒ forwardFailure(socket.setTcpNoDelay(on))
+      case IO.TrafficClass(tc)        ⇒ forwardFailure(socket.setTrafficClass(tc))
+      case IO.PerformancePreferences(connTime, latency, bandwidth) ⇒
+        forwardFailure(socket.setPerformancePreferences(connTime, latency, bandwidth))
+    }
+  }
+
+  def receive = {
     case Select ⇒
       select()
       if (running) self ! Select
       selectSent = running
 
-    case IO.Listen(server, address) ⇒
+    case IO.Listen(server, address, options) ⇒
       val channel = ServerSocketChannel open ()
       channel configureBlocking false
-      channel.socket bind (address, 1000) // TODO: make backlog configurable
+
+      val sock = channel.socket
+      options foreach {
+        case IO.ReceiveBufferSize(size) ⇒ forwardFailure(sock.setReceiveBufferSize(size))
+        case IO.ReuseAddress(on)        ⇒ forwardFailure(sock.setReuseAddress(on))
+        case IO.PerformancePreferences(connTime, latency, bandwidth) ⇒
+          forwardFailure(sock.setPerformancePreferences(connTime, latency, bandwidth))
+      }
+
+      channel.socket bind (address, 1000) // FIXME TODO: make backlog configurable
       channels update (server, channel)
       channel register (selector, OP_ACCEPT, server)
       server.owner ! IO.Listening(server, channel.socket.getLocalSocketAddress())
       run()
 
-    case IO.Connect(socket, address) ⇒
+    case IO.Connect(socket, address, options) ⇒
       val channel = SocketChannel open ()
       channel configureBlocking false
       channel connect address
+      setSocketOptions(channel.socket, options)
       channels update (socket, channel)
       channel register (selector, OP_CONNECT | OP_READ, socket)
       run()
 
-    case IO.Accept(socket, server) ⇒
+    case IO.Accept(socket, server, options) ⇒
       val queue = accepted(server)
       val channel = queue.dequeue()
+
+      channel match { case socketChannel: SocketChannel ⇒ setSocketOptions(socketChannel.socket, options) }
+
       channels update (socket, channel)
       channel register (selector, OP_READ, socket)
       run()
@@ -896,29 +1073,13 @@ final class IOManagerActor extends Actor {
   private def process(key: SelectionKey) {
     val handle = key.attachment.asInstanceOf[IO.Handle]
     try {
-      if (key.isConnectable) key.channel match {
-        case channel: SocketChannel ⇒ connect(handle.asSocket, channel)
-      }
-      if (key.isAcceptable) key.channel match {
-        case channel: ServerSocketChannel ⇒ accept(handle.asServer, channel)
-      }
-      if (key.isReadable) key.channel match {
-        case channel: ReadChannel ⇒ read(handle.asReadable, channel)
-      }
-      if (key.isWritable) key.channel match {
-        case channel: WriteChannel ⇒
-          try {
-            write(handle.asWritable, channel)
-          } catch {
-            case e: IOException ⇒
-            // ignore, let it fail on read to ensure nothing left in read buffer.
-          }
-      }
+      if (key.isConnectable) key.channel match { case channel: SocketChannel ⇒ connect(handle.asSocket, channel) }
+      if (key.isAcceptable) key.channel match { case channel: ServerSocketChannel ⇒ accept(handle.asServer, channel) }
+      if (key.isReadable) key.channel match { case channel: ReadChannel ⇒ read(handle.asReadable, channel) }
+      if (key.isWritable) key.channel match { case channel: WriteChannel ⇒ try write(handle.asWritable, channel) catch { case e: IOException ⇒ } } // ignore, let it fail on read to ensure nothing left in read buffer.
     } catch {
-      case e: ClassCastException           ⇒ cleanup(handle, Some(e))
-      case e: CancelledKeyException        ⇒ cleanup(handle, Some(e))
-      case e: IOException                  ⇒ cleanup(handle, Some(e))
-      case e: ActorInitializationException ⇒ cleanup(handle, Some(e))
+      case e @ (_: ClassCastException | _: CancelledKeyException | _: IOException | _: ActorInitializationException) ⇒
+        cleanup(handle, Some(e.asInstanceOf[Exception])) //Scala patmat is broken
     }
   }
 
@@ -936,9 +1097,6 @@ final class IOManagerActor extends Actor {
       case None ⇒
     }
   }
-
-  private def setOps(handle: IO.Handle, ops: Int): Unit =
-    channels(handle) keyFor selector interestOps ops
 
   private def addOps(handle: IO.Handle, ops: Int) {
     val key = channels(handle) keyFor selector
@@ -1005,9 +1163,9 @@ final class IOManagerActor extends Actor {
       }
     }
   }
-
 }
 
+//FIXME is this public API?
 final class WriteBuffer(bufferSize: Int) {
   private val _queue = new java.util.ArrayDeque[ByteString]
   private val _buffer = ByteBuffer.allocate(bufferSize)
@@ -1029,9 +1187,9 @@ final class WriteBuffer(bufferSize: Int) {
     this
   }
 
-  def length = _length
+  def length: Int = _length
 
-  def isEmpty = _length == 0
+  def isEmpty: Boolean = _length == 0
 
   def write(channel: WritableByteChannel with SelectableChannel): Int = {
     @tailrec

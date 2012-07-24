@@ -4,17 +4,19 @@
 
 package akka.actor
 
+import language.postfixOps
+
 import java.lang.Thread.sleep
 import org.scalatest.BeforeAndAfterAll
-import akka.dispatch.Await
+import scala.concurrent.Await
 import akka.testkit.TestEvent._
 import akka.testkit.EventFilter
 import java.util.concurrent.{ TimeUnit, CountDownLatch }
 import akka.testkit.AkkaSpec
 import akka.testkit.DefaultTimeout
 import akka.testkit.TestLatch
-import akka.util.duration._
-import akka.util.Duration
+import scala.concurrent.util.duration._
+import scala.concurrent.util.Duration
 import akka.pattern.ask
 
 @org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
@@ -40,7 +42,7 @@ class RestartStrategySpec extends AkkaSpec with DefaultTimeout {
 
       val slaveProps = Props(new Actor {
 
-        protected def receive = {
+        def receive = {
           case Ping  ⇒ countDownLatch.countDown()
           case Crash ⇒ throw new Exception("Crashing...")
         }
@@ -83,7 +85,7 @@ class RestartStrategySpec extends AkkaSpec with DefaultTimeout {
 
       val slaveProps = Props(new Actor {
 
-        protected def receive = {
+        def receive = {
           case Crash ⇒ throw new Exception("Crashing...")
         }
 
@@ -110,7 +112,7 @@ class RestartStrategySpec extends AkkaSpec with DefaultTimeout {
 
       val slaveProps = Props(new Actor {
 
-        protected def receive = {
+        def receive = {
           case Ping ⇒
             if (!pingLatch.isOpen) pingLatch.open else secondPingLatch.open
           case Crash ⇒ throw new Exception("Crashing...")
@@ -166,7 +168,7 @@ class RestartStrategySpec extends AkkaSpec with DefaultTimeout {
 
       val slaveProps = Props(new Actor {
 
-        protected def receive = {
+        def receive = {
           case Ping  ⇒ countDownLatch.countDown()
           case Crash ⇒ throw new Exception("Crashing...")
         }
@@ -221,7 +223,7 @@ class RestartStrategySpec extends AkkaSpec with DefaultTimeout {
 
       val slaveProps = Props(new Actor {
 
-        protected def receive = {
+        def receive = {
           case Ping  ⇒ countDownLatch.countDown()
           case Crash ⇒ throw new Exception("Crashing...")
         }

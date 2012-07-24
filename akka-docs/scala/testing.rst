@@ -61,20 +61,11 @@ Having access to the actual :class:`Actor` object allows application of all
 traditional unit testing techniques on the contained methods. Obtaining a
 reference is done like this:
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala#test-actor-ref
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala#test-actor-ref
 
 Since :class:`TestActorRef` is generic in the actor type it returns the
 underlying actor with its proper static type. From this point on you may bring
 any unit testing tool to bear on your actor as usual.
-
-Expecting Exceptions
---------------------
-
-Testing that an expected exception is thrown while processing a message sent to
-the actor under test can be done by using a :class:`TestActorRef` :meth:`receive` based
-invocation:
-
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala#test-expecting-exceptions
 
 .. _TestFSMRef:
 
@@ -85,7 +76,7 @@ If your actor under test is a :class:`FSM`, you may use the special
 :class:`TestFSMRef` which offers all features of a normal :class:`TestActorRef`
 and in addition allows access to the internal state:
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala#test-fsm-ref
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala#test-fsm-ref
 
 Due to a limitation in Scala’s type inference, there is only the factory method
 shown above, so you will probably write code like ``TestFSMRef(new MyFSM)``
@@ -111,10 +102,10 @@ operation to complement the :class:`Actor` testing: it supports all operations
 also valid on normal :class:`ActorRef`. Messages sent to the actor are
 processed synchronously on the current thread and answers may be sent back as
 usual. This trick is made possible by the :class:`CallingThreadDispatcher`
-described below; this dispatcher is set implicitly for any actor instantiated
-into a :class:`TestActorRef`.
+described below (see `CallingThreadDispatcher`_); this dispatcher is set
+implicitly for any actor instantiated into a :class:`TestActorRef`.
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala#test-behavior
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala#test-behavior
 
 As the :class:`TestActorRef` is a subclass of :class:`LocalActorRef` with a few
 special extras, also aspects like supervision and restarting work properly, but
@@ -128,14 +119,14 @@ One more special aspect which is overridden for single-threaded tests is the
 :meth:`receiveTimeout`, as including that would entail asynchronous queuing of
 :obj:`ReceiveTimeout` messages, violating the synchronous contract.
 
-.. warning::
+.. note::
 
    To summarize: :class:`TestActorRef` overwrites two fields: it sets the
    dispatcher to :obj:`CallingThreadDispatcher.global` and it sets the
    :obj:`receiveTimeout` to None.
 
-The Way In-Between
-------------------
+The Way In-Between: Expecting Exceptions
+----------------------------------------
 
 If you want to test the actor behavior, including hotswapping, but without
 involving a dispatcher and without having the :class:`TestActorRef` swallow
@@ -143,10 +134,7 @@ any thrown exceptions, then there is another mode available for you: just use
 the :meth:`receive` method :class:`TestActorRef`, which will be forwarded to the
 underlying actor:
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala#test-unhandled
-
-The above sample assumes the default behavior for unhandled messages, i.e.
-that the actor doesn't swallow all messages and doesn't override :meth:`unhandled`.
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala#test-expecting-exceptions
 
 Use Cases
 ---------
@@ -182,7 +170,7 @@ single procedure drives the test.
 The :class:`TestKit` class contains a collection of tools which makes this
 common task easy.
 
-.. includecode:: code/akka/docs/testkit/PlainWordSpec.scala#plain-spec
+.. includecode:: code/docs/testkit/PlainWordSpec.scala#plain-spec
 
 The :class:`TestKit` contains an actor named :obj:`testActor` which is the
 entry point for messages to be examined with the various ``expectMsg...``
@@ -194,8 +182,10 @@ is a whole set of examination methods, e.g. receiving all consecutive messages
 matching certain criteria, receiving a whole sequence of fixed messages or
 classes, receiving nothing for some time, etc.
 
-Remember to shut down the actor system after the test is finished (also in case
-of failure) so that all actors—including the test actor—are stopped.
+The ActorSystem passed in to the constructor of TestKit is accessible via the
+:obj:`system` member.  Remember to shut down the actor system after the test is
+finished (also in case of failure) so that all actors—including the test
+actor—are stopped.
 
 Built-In Assertions
 -------------------
@@ -203,12 +193,12 @@ Built-In Assertions
 The above mentioned :meth:`expectMsg` is not the only method for formulating
 assertions concerning received messages. Here is the full list:
 
-  * :meth:`expectMsg[T](d: Duration, msg: T): T`
+  * :meth:`expectMsg[T](d: Duration, msg: T): T`
 
     The given message object must be received within the specified time; the
     object will be returned.
 
-  * :meth:`expectMsgPF[T](d: Duration)(pf: PartialFunction[Any, T]): T`
+  * :meth:`expectMsgPF[T](d: Duration)(pf: PartialFunction[Any, T]): T`
 
     Within the given time period, a message must be received and the given
     partial function must be defined for that message; the result from applying
@@ -217,40 +207,40 @@ assertions concerning received messages. Here is the full list:
     the deadline from the innermost enclosing :ref:`within <TestKit.within>`
     block instead.
 
-  * :meth:`expectMsgClass[T](d: Duration, c: Class[T]): T`
+  * :meth:`expectMsgClass[T](d: Duration, c: Class[T]): T`
 
     An object which is an instance of the given :class:`Class` must be received
     within the allotted time frame; the object will be returned. Note that this
     does a conformance check; if you need the class to be equal, have a look at
     :meth:`expectMsgAllClassOf` with a single given class argument.
 
-  * :meth:`expectMsgType[T: Manifest](d: Duration)`
+  * :meth:`expectMsgType[T: Manifest](d: Duration)`
 
     An object which is an instance of the given type (after erasure) must be
     received within the allotted time frame; the object will be returned. This
     method is approximately equivalent to
     ``expectMsgClass(manifest[T].erasure)``.
 
-  * :meth:`expectMsgAnyOf[T](d: Duration, obj: T*): T`
+  * :meth:`expectMsgAnyOf[T](d: Duration, obj: T*): T`
 
     An object must be received within the given time, and it must be equal (
     compared with ``==``) to at least one of the passed reference objects; the
     received object will be returned.
 
-  * :meth:`expectMsgAnyClassOf[T](d: Duration, obj: Class[_ <: T]*): T`
+  * :meth:`expectMsgAnyClassOf[T](d: Duration, obj: Class[_ <: T]*): T`
 
     An object must be received within the given time, and it must be an
     instance of at least one of the supplied :class:`Class` objects; the
     received object will be returned.
 
-  * :meth:`expectMsgAllOf[T](d: Duration, obj: T*): Seq[T]`
+  * :meth:`expectMsgAllOf[T](d: Duration, obj: T*): Seq[T]`
 
     A number of objects matching the size of the supplied object array must be
     received within the given time, and for each of the given objects there
     must exist at least one among the received ones which equals (compared with
     ``==``) it. The full sequence of received objects is returned.
 
-  * :meth:`expectMsgAllClassOf[T](d: Duration, c: Class[_ <: T]*): Seq[T]`
+  * :meth:`expectMsgAllClassOf[T](d: Duration, c: Class[_ <: T]*): Seq[T]`
 
     A number of objects matching the size of the supplied :class:`Class` array
     must be received within the given time, and for each of the given classes
@@ -258,25 +248,25 @@ assertions concerning received messages. Here is the full list:
     (compared with ``==``) it (this is *not* a conformance check). The full
     sequence of received objects is returned.
 
-  * :meth:`expectMsgAllConformingOf[T](d: Duration, c: Class[_ <: T]*): Seq[T]`
+  * :meth:`expectMsgAllConformingOf[T](d: Duration, c: Class[_ <: T]*): Seq[T]`
 
     A number of objects matching the size of the supplied :class:`Class` array
     must be received within the given time, and for each of the given classes
     there must exist at least one among the received objects which is an
     instance of this class. The full sequence of received objects is returned.
 
-  * :meth:`expectNoMsg(d: Duration)`
+  * :meth:`expectNoMsg(d: Duration)`
 
     No message must be received within the given time. This also fails if a
     message has been received before calling this method which has not been
     removed from the queue using one of the other methods.
 
-  * :meth:`receiveN(n: Int, d: Duration): Seq[AnyRef]`
+  * :meth:`receiveN(n: Int, d: Duration): Seq[AnyRef]`
 
     ``n`` messages must be received within the given time; the received
     messages are returned.
 
-  * :meth:`fishForMessage(max: Duration, hint: String)(pf: PartialFunction[Any, Boolean]): Any`
+  * :meth:`fishForMessage(max: Duration, hint: String)(pf: PartialFunction[Any, Boolean]): Any`
 
     Keep receiving messages as long as the time is not used up and the partial
     function matches and returns ``false``. Returns the message received for
@@ -286,13 +276,13 @@ assertions concerning received messages. Here is the full list:
 In addition to message reception assertions there are also methods which help
 with message flows:
 
-  * :meth:`receiveOne(d: Duration): AnyRef`
+  * :meth:`receiveOne(d: Duration): AnyRef`
 
     Tries to receive one message for at most the given time interval and
     returns ``null`` in case of failure. If the given Duration is zero, the
     call is non-blocking (polling mode).
 
-  * :meth:`receiveWhile[T](max: Duration, idle: Duration, messages: Int)(pf: PartialFunction[Any, T]): Seq[T]`
+  * :meth:`receiveWhile[T](max: Duration, idle: Duration, messages: Int)(pf: PartialFunction[Any, T]): Seq[T]`
 
     Collect messages as long as
 
@@ -307,14 +297,14 @@ with message flows:
     idle timeout feature). The number of expected messages defaults to
     ``Int.MaxValue``, which effectively disables this limit.
 
-  * :meth:`awaitCond(p: => Boolean, max: Duration, interval: Duration)`
+  * :meth:`awaitCond(p: => Boolean, max: Duration, interval: Duration)`
 
     Poll the given condition every :obj:`interval` until it returns ``true`` or
     the :obj:`max` duration is used up. The interval defaults to 100 ms and the
     maximum defaults to the time remaining in the innermost enclosing
     :ref:`within <TestKit.within>` block.
 
-  * :meth:`ignoreMsg(pf: PartialFunction[AnyRef, Boolean])`
+  * :meth:`ignoreMsg(pf: PartialFunction[AnyRef, Boolean])`
 
     :meth:`ignoreNoMsg`
 
@@ -327,8 +317,8 @@ with message flows:
     This feature is useful e.g. when testing a logging system, where you want
     to ignore regular messages and are only interested in your specific ones.
 
-Expecting Exceptions
---------------------
+Expecting Log Messages
+----------------------
 
 Since an integration test does not allow to the internal processing of the
 participating actors, verifying expected exceptions cannot be done directly.
@@ -337,7 +327,21 @@ handler with the :class:`TestEventListener` and using an :class:`EventFilter`
 allows assertions on log messages, including those which are generated by
 exceptions:
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala#event-filter
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala#event-filter
+
+If a number of occurrences is specific—as demonstrated above—then ``intercept``
+will block until that number of matching messages have been received or the
+timeout configured in ``akka.test.filter-leeway`` is used up (time starts
+counting after the passed-in block of code returns). In case of a timeout the
+test fails.
+
+.. note::
+
+   Be sure to exchange the default event handler with the
+   :class:`TestEventListener` in your ``application.conf`` to enable this
+   function::
+
+     akka.event-handlers = [akka.testkit.TestEventListener]
 
 .. _TestKit.within:
 
@@ -361,7 +365,7 @@ The block given to :meth:`within` must complete after a :ref:`Duration` which
 is between :obj:`min` and :obj:`max`, where the former defaults to zero. The
 deadline calculated by adding the :obj:`max` parameter to the block's start
 time is implicitly available within the block to all examination methods, if
-you do not specify it, is is inherited from the innermost enclosing
+you do not specify it, it is inherited from the innermost enclosing
 :meth:`within` block.
 
 It should be noted that if the last message-receiving assertion of the block is
@@ -370,7 +374,7 @@ It should be noted that if the last message-receiving assertion of the block is
 latencies. This means that while individual contained assertions still use the
 maximum time bound, the overall block may take arbitrarily longer in this case.
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala#test-within
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala#test-within
 
 .. note::
 
@@ -393,7 +397,7 @@ internally scaled by a factor taken from the :ref:`configuration`,
 You can scale other durations with the same factor by using the implicit conversion
 in ``akka.testkit`` package object to add dilated function to :class:`Duration`.
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala#duration-dilation
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala#duration-dilation
 
 Resolving Conflicts with Implicit ActorRef
 ------------------------------------------
@@ -401,7 +405,7 @@ Resolving Conflicts with Implicit ActorRef
 If you want the sender of messages inside your TestKit-based tests to be the ``testActor``
 simply mix in ``ÌmplicitSender`` into your test.
 
-.. includecode:: code/akka/docs/testkit/PlainWordSpec.scala#implicit-sender
+.. includecode:: code/docs/testkit/PlainWordSpec.scala#implicit-sender
 
 Using Multiple Probe Actors
 ---------------------------
@@ -414,7 +418,7 @@ message flows. To make this more powerful and convenient, there is a concrete
 implementation called :class:`TestProbe`. The functionality is best explained
 using a small example:
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala
    :include: imports-test-probe,my-double-echo,test-probe
 
 Here a the system under test is simulated by :class:`MyDoubleEcho`, which is
@@ -428,7 +432,7 @@ the test setup.
 Probes may also be equipped with custom assertions to make your test code even
 more concise and clear:
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala
    :include: test-special-probe
 
 You have complete flexibility here in mixing and matching the :class:`TestKit`
@@ -442,7 +446,7 @@ Replying to Messages Received by Probes
 The probes keep track of the communications channel for replies, if possible,
 so they can also reply:
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala#test-probe-reply
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala#test-probe-reply
 
 Forwarding Messages Received by Probes
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -453,7 +457,7 @@ sent to a :class:`TestProbe` ``probe`` instead, you can make assertions
 concerning volume and timing of the message flow while still keeping the
 network functioning:
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala
    :include: test-probe-forward-actors,test-probe-forward
 
 The ``dest`` actor will receive the same message invocation as if no test probe
@@ -471,8 +475,9 @@ B``, as long as a certain protocol is obeyed.
 
 .. includecode:: ../../akka-testkit/src/test/scala/akka/testkit/TestProbeSpec.scala#autopilot
 
-The :meth:`run` method must return the auto-pilot for the next message, wrapped
-in an :class:`Option`; setting it to :obj:`None` terminates the auto-pilot.
+The :meth:`run` method must return the auto-pilot for the next message, which
+may be :class:`KeepRunning` to retain the current one or :class:`NoAutoPilot`
+to switch it off.
 
 Caution about Timing Assertions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -481,23 +486,13 @@ The behavior of :meth:`within` blocks when using test probes might be perceived
 as counter-intuitive: you need to remember that the nicely scoped deadline as
 described :ref:`above <TestKit.within>` is local to each probe. Hence, probes
 do not react to each other's deadlines or to the deadline set in an enclosing
-:class:`TestKit` instance::
+:class:`TestKit` instance:
 
-  class SomeTest extends TestKit(_system: ActorSystem) with ImplicitSender {
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala#test-within-probe
 
-    val probe = TestProbe()
+Here, the ``expectMsg`` call will use the default timeout.
 
-    within(100 millis) {
-      probe.expectMsg("hallo")  // Will hang forever!
-    }
-  }
-
-This test will hang indefinitely, because the :meth:`expectMsg` call does not
-see any deadline. Currently, the only option is to use ``probe.within`` in the
-above code to make it work; later versions may include lexically scoped
-deadlines using implicit arguments.
-
-.. _TestCallingThreadDispatcherRef:
+.. _Scala-CallingThreadDispatcher:
 
 CallingThreadDispatcher
 =======================
@@ -514,7 +509,7 @@ How to use it
 
 Just set the dispatcher as you normally would:
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala#calling-thread-dispatcher
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala#calling-thread-dispatcher
 
 How it works
 ------------
@@ -596,7 +591,7 @@ has to offer:
    exception stack traces
  - Exclusion of certain classes of dead-lock scenarios
 
-.. _actor.logging:
+.. _actor.logging-scala:
 
 Tracing Actor Invocations
 =========================
@@ -618,7 +613,7 @@ options:
   ``akka.actor.debug.receive`` — which enables the :meth:`loggable`
   statement to be applied to an actor’s :meth:`receive` function:
 
-.. includecode:: code/akka/docs/testkit/TestkitDocSpec.scala#logging-receive
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala#logging-receive
 
 .
   If the abovementioned setting is not given in the :ref:`configuration`, this method will
@@ -657,3 +652,58 @@ full logging of actor activities using this configuration fragment::
     }
   }
 
+Different Testing Frameworks
+============================
+
+Akka’s own test suite is written using `ScalaTest <http://scalatest.org>`_,
+which also shines through in documentation examples. However, the TestKit and
+its facilities do not depend on that framework, you can essentially use
+whichever suits your development style best.
+
+This section contains a collection of known gotchas with some other frameworks,
+which is by no means exhaustive and does not imply endorsement or special
+support.
+
+When you need it to be a trait
+------------------------------
+
+If for some reason it is a problem to inherit from :class:`TestKit` due to it
+being a concrete class instead of a trait, there’s :class:`TestKitBase`:
+
+.. includecode:: code/docs/testkit/TestkitDocSpec.scala
+   :include: test-kit-base
+   :exclude: put-your-test-code-here
+
+The ``implicit lazy val system`` must be declared exactly like that (you can of
+course pass arguments to the actor system factory as needed) because trait
+:class:`TestKitBase` needs the system during its construction.
+
+.. warning::
+
+  Use of the trait is discouraged because of potential issues with binary
+  backwards compatibility in the future, use at own risk.
+
+Specs2
+------
+
+Some `Specs2 <http://specs2.org>`_ users have contributed examples of how to work around some clashes which may arise:
+
+* Mixing TestKit into :class:`org.specs2.mutable.Specification` results in a
+  name clash involving the ``end`` method (which is a private variable in
+  TestKit and an abstract method in Specification); if mixing in TestKit first,
+  the code may compile but might then fail at runtime. The work-around—which is
+  actually beneficial also for the third point—is to apply the TestKit together
+  with :class:`org.specs2.specification.Scope`.
+* The Specification traits provide a :class:`Duration` DSL which uses partly
+  the same method names as :class:`akka.util.Duration`, resulting in ambiguous
+  implicits if ``akka.util.duration._`` is imported. There are two work-arounds:
+
+  * either use the Specification variant of Duration and supply an implicit
+    conversion to the Akka Duration. This conversion is not supplied with the
+    Akka distribution because that would mean that our JAR files would dependon
+    Specs2, which is not justified by this little feature.
+
+  * or mix :class:`org.specs2.time.NoTimeConversions` into the Specification.
+
+* Specifications are by default executed concurrently, which requires some care
+  when writing the tests or alternatively the ``sequential`` keyword.

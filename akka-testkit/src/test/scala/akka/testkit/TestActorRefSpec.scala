@@ -3,12 +3,14 @@
  */
 package akka.testkit
 
+import language.{ postfixOps, reflectiveCalls }
+
 import org.scalatest.matchers.MustMatchers
 import org.scalatest.{ BeforeAndAfterEach, WordSpec }
 import akka.actor._
 import akka.event.Logging.Warning
-import akka.dispatch.{ Future, Promise, Await }
-import akka.util.duration._
+import scala.concurrent.{ Future, Promise, Await }
+import scala.concurrent.util.duration._
 import akka.actor.ActorSystem
 import akka.pattern.ask
 import akka.dispatch.Dispatcher
@@ -246,10 +248,17 @@ class TestActorRefSpec extends AkkaSpec("disp1.type=Dispatcher") with BeforeAndA
       a.underlying.dispatcher.getClass must be(classOf[Dispatcher])
     }
 
-    "proxy receive for the underlying actor" in {
+    "proxy receive for the underlying actor without sender" in {
       val ref = TestActorRef[WorkerActor]
       ref.receive("work")
       ref.isTerminated must be(true)
+    }
+
+    "proxy receive for the underlying actor with sender" in {
+      val ref = TestActorRef[WorkerActor]
+      ref.receive("work", testActor)
+      ref.isTerminated must be(true)
+      expectMsg("workDone")
     }
 
   }

@@ -1,25 +1,26 @@
-package akka.actor
-
 /**
  * Copyright (C) 2009-2012 Typesafe Inc. <http://www.typesafe.com>
  */
+package akka.actor
+
+import language.postfixOps
 
 import org.scalatest.{ BeforeAndAfterAll, BeforeAndAfterEach }
-import akka.util.Duration
 import akka.util.Timeout
-import akka.util.duration._
+import scala.concurrent.{ Await, Future, Promise }
+import scala.concurrent.util.Duration
+import scala.concurrent.util.duration._
 import java.util.concurrent.atomic.AtomicReference
 import annotation.tailrec
 import akka.testkit.{ EventFilter, filterEvents, AkkaSpec }
-import akka.serialization.SerializationExtension
-import java.util.concurrent.{ TimeUnit, CountDownLatch }
-import akka.japi.{ Creator, Option ⇒ JOption }
+import akka.japi.{ Option ⇒ JOption }
 import akka.testkit.DefaultTimeout
-import akka.dispatch.{ Await, Dispatchers, Future, Promise }
+import akka.dispatch.{ Dispatchers }
 import akka.pattern.ask
 import akka.serialization.JavaSerializer
 import akka.actor.TypedActor._
 import java.lang.IllegalStateException
+import java.util.concurrent.{ TimeoutException, TimeUnit, CountDownLatch }
 
 object TypedActorSpec {
 
@@ -64,6 +65,7 @@ object TypedActorSpec {
   trait Foo {
     def pigdog(): String
 
+    @throws(classOf[TimeoutException])
     def self = TypedActor.self[Foo]
 
     def futurePigdog(): Future[String]
@@ -76,20 +78,26 @@ object TypedActorSpec {
 
     def failingFuturePigdog(): Future[String] = throw new IllegalStateException("expected")
 
+    @throws(classOf[TimeoutException])
     def failingOptionPigdog(): Option[String] = throw new IllegalStateException("expected")
 
+    @throws(classOf[TimeoutException])
     def failingJOptionPigdog(): JOption[String] = throw new IllegalStateException("expected")
 
     def failingPigdog(): Unit = throw new IllegalStateException("expected")
 
+    @throws(classOf[TimeoutException])
     def optionPigdog(): Option[String]
 
+    @throws(classOf[TimeoutException])
     def optionPigdog(delay: Long): Option[String]
 
+    @throws(classOf[TimeoutException])
     def joptionPigdog(delay: Long): JOption[String]
 
     def incr()
 
+    @throws(classOf[TimeoutException])
     def read(): Int
 
     def testMethodCallSerialization(foo: Foo, s: String, i: Int): Unit = throw new IllegalStateException("expected")
@@ -101,7 +109,7 @@ object TypedActorSpec {
 
     def pigdog = "Pigdog"
 
-    def futurePigdog(): Future[String] = Promise.successful(pigdog)
+    def futurePigdog(): Future[String] = Promise.successful(pigdog).future
 
     def futurePigdog(delay: Long): Future[String] = {
       Thread.sleep(delay)
@@ -110,7 +118,7 @@ object TypedActorSpec {
 
     def futurePigdog(delay: Long, numbered: Int): Future[String] = {
       Thread.sleep(delay)
-      Promise.successful(pigdog + numbered)
+      Promise.successful(pigdog + numbered).future
     }
 
     def futureComposePigdogFrom(foo: Foo): Future[String] = {
@@ -300,7 +308,7 @@ class TypedActorSpec extends AkkaSpec(TypedActorSpec.config)
     "be able to call methods returning Scala Options" in {
       val t = newFooBar(Duration(500, "ms"))
       t.optionPigdog(200).get must be("Pigdog")
-      t.optionPigdog(700) must be(None)
+      t.optionPigdog(1000) must be(None)
       mustStop(t)
     }
 
@@ -418,6 +426,31 @@ class TypedActorSpec extends AkkaSpec(TypedActorSpec.config)
         mNew.parameters(1) must be(null)
         mNew.parameters(2) must not be null
         mNew.parameters(2).asInstanceOf[Int] must be === 1
+      }
+    }
+
+    "be able to serialize and deserialize proxies" in {
+      import java.io._
+      JavaSerializer.currentSystem.withValue(system.asInstanceOf[ExtendedActorSystem]) {
+        val t = newFooBar(Duration(2, "s"))
+
+        t.optionPigdog() must be === Some("Pigdog")
+
+        val baos = new ByteArrayOutputStream(8192 * 4)
+        val out = new ObjectOutputStream(baos)
+
+        out.writeObject(t)
+        out.close()
+
+        val in = new ObjectInputStream(new ByteArrayInputStream(baos.toByteArray))
+
+        val tNew = in.readObject().asInstanceOf[Foo]
+
+        tNew must be === t
+
+        tNew.optionPigdog() must be === Some("Pigdog")
+
+        mustStop(t)
       }
     }
 

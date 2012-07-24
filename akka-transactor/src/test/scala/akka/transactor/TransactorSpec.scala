@@ -4,13 +4,15 @@
 
 package akka.transactor
 
+import language.postfixOps
+
 import akka.actor._
-import akka.dispatch.Await
-import akka.util.duration._
+import scala.concurrent.Await
+import scala.concurrent.util.duration._
 import akka.util.Timeout
 import akka.testkit._
 import scala.concurrent.stm._
-import akka.pattern.ask
+import akka.pattern.{ AskTimeoutException, ask }
 
 object TransactorIncrement {
   case class Increment(friends: Seq[ActorRef], latch: TestLatch)
@@ -105,7 +107,7 @@ class TransactorSpec extends AkkaSpec {
       val ignoreExceptions = Seq(
         EventFilter[ExpectedFailureException](),
         EventFilter[CoordinatedTransactionException](),
-        EventFilter[ActorTimeoutException]())
+        EventFilter[AskTimeoutException]())
       filterEvents(ignoreExceptions) {
         val (counters, failer) = createTransactors
         val failLatch = TestLatch(numCounters)

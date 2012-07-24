@@ -44,26 +44,4 @@ object Helpers {
     if (next == 0) sb.toString
     else base64(next, sb)
   }
-
-  def ignore[E: Manifest](body: ⇒ Unit) {
-    try {
-      body
-    } catch {
-      case e if manifest[E].erasure.isAssignableFrom(e.getClass) ⇒ ()
-    }
-  }
-
-  def withPrintStackTraceOnError(body: ⇒ Unit) {
-    try {
-      body
-    } catch {
-      case e: Throwable ⇒
-        val sw = new java.io.StringWriter()
-        var root = e
-        while (root.getCause ne null) root = e.getCause
-        root.printStackTrace(new java.io.PrintWriter(sw))
-        System.err.println(sw.toString)
-        throw e
-    }
-  }
 }

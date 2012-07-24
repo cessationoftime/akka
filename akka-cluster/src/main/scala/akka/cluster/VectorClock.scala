@@ -19,7 +19,7 @@ class VectorClockException(message: String) extends AkkaException(message)
  */
 trait Versioned[T] {
   def version: VectorClock
-  def +(node: VectorClock.Node): T
+  def :+(node: VectorClock.Node): T
 }
 
 /**
@@ -105,7 +105,7 @@ object VectorClock {
   object Timestamp {
     private val counter = new AtomicLong(newTimestamp)
 
-    def zero(): Timestamp = Timestamp(0L)
+    val zero: Timestamp = Timestamp(0L)
 
     def apply(): Timestamp = {
       var newTime: Long = 0L
@@ -142,7 +142,7 @@ case class VectorClock(
   /**
    * Increment the version for the node passed as argument. Returns a new VectorClock.
    */
-  def +(node: Node): VectorClock = copy(versions = versions + (node -> Timestamp()))
+  def :+(node: Node): VectorClock = copy(versions = versions + (node -> Timestamp()))
 
   /**
    * Returns true if <code>this</code> and <code>that</code> are concurrent else false.

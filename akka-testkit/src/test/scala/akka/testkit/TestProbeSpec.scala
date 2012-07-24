@@ -1,11 +1,13 @@
 package akka.testkit
 
+import language.postfixOps
+
 import org.scalatest.WordSpec
 import org.scalatest.matchers.MustMatchers
 import org.scalatest.{ BeforeAndAfterEach, WordSpec }
 import akka.actor._
-import akka.util.duration._
-import akka.dispatch.{ Await, Future }
+import scala.concurrent.{ Future, Await }
+import scala.concurrent.util.duration._
 import akka.pattern.ask
 
 @org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
@@ -44,10 +46,10 @@ class TestProbeSpec extends AkkaSpec with DefaultTimeout {
       //#autopilot
       val probe = TestProbe()
       probe.setAutoPilot(new TestActor.AutoPilot {
-        def run(sender: ActorRef, msg: Any): Option[TestActor.AutoPilot] =
+        def run(sender: ActorRef, msg: Any): TestActor.AutoPilot =
           msg match {
-            case "stop" ⇒ None
-            case x      ⇒ testActor.tell(x, sender); Some(this)
+            case "stop" ⇒ TestActor.NoAutoPilot
+            case x      ⇒ testActor.tell(x, sender); TestActor.KeepRunning
           }
       })
       //#autopilot
@@ -63,6 +65,14 @@ class TestProbeSpec extends AkkaSpec with DefaultTimeout {
       probe.expectMsg("hallo")
       testActor ! "end"
       expectMsg("end") // verify that "hallo" did not get through
+    }
+
+    "be able to expect primitive types" in {
+      for (_ ← 1 to 4) testActor ! 42
+      expectMsgType[Int] must be(42)
+      expectMsgAnyClassOf(classOf[Int]) must be(42)
+      expectMsgAllClassOf(classOf[Int]) must be(Seq(42))
+      expectMsgAllConformingOf(classOf[Int]) must be(Seq(42))
     }
 
   }

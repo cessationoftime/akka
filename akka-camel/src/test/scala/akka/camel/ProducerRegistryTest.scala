@@ -4,10 +4,12 @@
 
 package akka.camel
 
+import language.postfixOps
+
 import org.scalatest.matchers.MustMatchers
 import org.scalatest.WordSpec
 import akka.camel.TestSupport.SharedCamelSystem
-import akka.util.duration._
+import scala.concurrent.util.duration._
 import akka.actor.{ ActorRef, Props }
 
 class ProducerRegistryTest extends WordSpec with MustMatchers with SharedCamelSystem {
@@ -19,10 +21,10 @@ class ProducerRegistryTest extends WordSpec with MustMatchers with SharedCamelSy
     "register a started SendProcessor for the producer, which is stopped when the actor is stopped" in {
       val actorRef = newEmptyActor
       val processor = registerProcessorFor(actorRef)
-      camel.awaitActivation(actorRef, 1 second)
+      camel.awaitActivation(actorRef, 5 second)
       processor.isStarted must be(true)
       system.stop(actorRef)
-      camel.awaitDeactivation(actorRef, 1 second)
+      camel.awaitDeactivation(actorRef, 5 second)
       (processor.isStopping || processor.isStopped) must be(true)
     }
     "remove and stop the SendProcessor if the actorRef is registered" in {

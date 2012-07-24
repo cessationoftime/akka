@@ -1,13 +1,15 @@
 package akka.camel.internal
 
 import akka.actor.ActorSystem
-import component.{ DurationTypeConverter, ActorComponent }
-import org.apache.camel.CamelContext
+import akka.camel.internal.component.{ DurationTypeConverter, ActorComponent }
 import org.apache.camel.impl.DefaultCamelContext
 import scala.Predef._
 import akka.event.Logging
-import akka.camel.Camel
-import akka.util.{ NonFatal, Duration }
+import akka.camel.{ CamelSettings, Camel }
+import scala.util.control.NonFatal
+import scala.concurrent.util.Duration
+
+import org.apache.camel.{ ProducerTemplate, CamelContext }
 
 /**
  * For internal use only.
@@ -26,21 +28,23 @@ private[camel] class DefaultCamel(val system: ActorSystem) extends Camel {
 
   lazy val context: CamelContext = {
     val ctx = new DefaultCamelContext
-    ctx.setName(system.name);
+    ctx.setName(system.name)
     ctx.setStreamCaching(true)
-    ctx.addComponent("actor", new ActorComponent(this))
+    ctx.addComponent("akka", new ActorComponent(this, system))
     ctx.getTypeConverterRegistry.addTypeConverter(classOf[Duration], classOf[String], DurationTypeConverter)
     ctx
   }
 
-  lazy val template = context.createProducerTemplate()
+  val settings = new CamelSettings(system.settings.config)
+
+  lazy val template: ProducerTemplate = context.createProducerTemplate()
 
   /**
    * Starts camel and underlying camel context and template.
    * Only the creator of Camel should start and stop it.
    * @see akka.camel.DefaultCamel#stop()
    */
-  def start = {
+  def start(): this.type = {
     context.start()
     try template.start() catch { case NonFatal(e) ⇒ context.stop(); throw e }
     log.debug("Started CamelContext[{}] for ActorSystem[{}]", context.getName, system.name)
@@ -54,9 +58,9 @@ private[camel] class DefaultCamel(val system: ActorSystem) extends Camel {
    *
    * @see akka.camel.DefaultCamel#start()
    */
-  def shutdown() {
+  def shutdown(): Unit = {
     try context.stop() finally {
-      try { template.stop() } catch { case NonFatal(e) ⇒ log.debug("Swallowing non-fatal exception [{}] on stopping Camel producer template", e) }
+      try template.stop() catch { case NonFatal(e) ⇒ log.debug("Swallowing non-fatal exception [{}] on stopping Camel producer template", e) }
     }
     log.debug("Stopped CamelContext[{}] for ActorSystem[{}]", context.getName, system.name)
   }

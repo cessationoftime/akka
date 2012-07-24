@@ -4,9 +4,12 @@
 
 package akka.camel
 
+import language.postfixOps
+import language.existentials
+
 import akka.actor._
 import org.scalatest.matchers.MustMatchers
-import akka.util.duration._
+import scala.concurrent.util.duration._
 import TestSupport._
 import org.scalatest.WordSpec
 import org.apache.camel.model.RouteDefinition
@@ -14,7 +17,8 @@ import org.apache.camel.builder.Builder
 import org.apache.camel.{ FailedToCreateRouteException, CamelExecutionException }
 import java.util.concurrent.{ ExecutionException, TimeUnit, TimeoutException }
 import akka.testkit.TestLatch
-import akka.dispatch.Await
+import scala.concurrent.Await
+import akka.actor.Status.Failure
 
 class ConsumerIntegrationTest extends WordSpec with MustMatchers with NonSharedCamelSystem {
   private val defaultTimeout = 10
@@ -80,6 +84,18 @@ class ConsumerIntegrationTest extends WordSpec with MustMatchers with NonSharedC
 
     camel.routeCount must be > (0)
 
+    system.stop(consumer)
+    camel.awaitDeactivation(consumer, defaultTimeout seconds)
+
+    camel.routeCount must be(0)
+  }
+
+  "Consumer must register on uri passed in through constructor" in {
+    val consumer = start(new TestActor("direct://test"))
+    camel.awaitActivation(consumer, defaultTimeout seconds)
+
+    camel.routeCount must be > (0)
+    camel.routes.get(0).getEndpoint.getEndpointUri must be("direct://test")
     system.stop(consumer)
     camel.awaitDeactivation(consumer, defaultTimeout seconds)
 
@@ -167,5 +183,5 @@ trait ErrorPassing {
 }
 
 trait ManualAckConsumer extends Consumer {
-  override def autoack = false
+  override def autoAck = false
 }

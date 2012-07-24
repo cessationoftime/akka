@@ -4,10 +4,13 @@
 
 package akka.actor
 
-import akka.util.Duration
+import scala.concurrent.util.Duration
 import com.typesafe.config._
 import akka.routing._
-import java.util.concurrent.{ TimeUnit, ConcurrentHashMap }
+import java.util.concurrent.{ TimeUnit }
+import akka.util.WildcardTree
+import java.util.concurrent.atomic.AtomicReference
+import annotation.tailrec
 
 /**
  * This class represents deployment configuration for a given actor path. It is
@@ -31,8 +34,19 @@ final case class Deploy(
   routerConfig: RouterConfig = NoRouter,
   scope: Scope = NoScopeGiven) {
 
+  /**
+   * Java API to create a Deploy with the given RouterConfig
+   */
   def this(routing: RouterConfig) = this("", ConfigFactory.empty, routing)
+
+  /**
+   * Java API to create a Deploy with the given RouterConfig with Scope
+   */
   def this(routing: RouterConfig, scope: Scope) = this("", ConfigFactory.empty, routing, scope)
+
+  /**
+   * Java API to create a Deploy with the given Scope
+   */
   def this(scope: Scope) = this("", ConfigFactory.empty, NoRouter, scope)
 
   /**
@@ -64,13 +78,9 @@ trait Scope {
 
 //TODO add @SerialVersionUID(1L) when SI-4804 is fixed
 abstract class LocalScope extends Scope
-case object LocalScope extends LocalScope {
-  /**
-   * Java API
-   */
-  @deprecated("use instance() method instead", "2.0.1")
-  def scope: Scope = this
 
+//FIXME docs
+case object LocalScope extends LocalScope {
   /**
    * Java API: get the singleton instance
    */
@@ -98,28 +108,38 @@ case object NoScopeGiven extends NoScopeGiven {
  *
  * @author <a href="http://jonasboner.com">Jonas Bon&#233;r</a>
  */
-class Deployer(val settings: ActorSystem.Settings, val dynamicAccess: DynamicAccess) {
+private[akka] class Deployer(val settings: ActorSystem.Settings, val dynamicAccess: DynamicAccess) {
 
   import scala.collection.JavaConverters._
 
-  private val deployments = new ConcurrentHashMap[String, Deploy]
+  private val deployments = new AtomicReference(WildcardTree[Deploy]())
   private val config = settings.config.getConfig("akka.actor.deployment")
   protected val default = config.getConfig("default")
+
   config.root.asScala flatMap {
     case ("default", _)             ⇒ None
     case (key, value: ConfigObject) ⇒ parseConfig(key, value.toConfig)
     case _                          ⇒ None
   } foreach deploy
 
-  def lookup(path: String): Option[Deploy] = Option(deployments.get(path))
+  def lookup(path: ActorPath): Option[Deploy] = lookup(path.elements.drop(1).iterator)
 
-  def deploy(d: Deploy): Unit = deployments.put(d.path, d)
+  def lookup(path: Iterable[String]): Option[Deploy] = lookup(path.iterator)
 
-  protected def parseConfig(key: String, config: Config): Option[Deploy] = {
+  def lookup(path: Iterator[String]): Option[Deploy] = deployments.get().find(path).data
+
+  def deploy(d: Deploy): Unit = {
+    @tailrec def add(path: Array[String], d: Deploy, w: WildcardTree[Deploy] = deployments.get): Unit =
+      if (!deployments.compareAndSet(w, w.insert(path.iterator, d))) add(path, d)
+
+    add(d.path.split("/").drop(1), d)
+  }
+
+  def parseConfig(key: String, config: Config): Option[Deploy] = {
 
     val deployment = config.withFallback(default)
 
-    val routees = deployment.getStringList("routees.paths").asScala.toSeq
+    val routees = Vector() ++ deployment.getStringList("routees.paths").asScala
 
     val nrOfInstances = deployment.getInt("nr-of-instances")
 
@@ -149,5 +169,4 @@ class Deployer(val settings: ActorSystem.Settings, val dynamicAccess: DynamicAcc
 
     Some(Deploy(key, deployment, router, NoScopeGiven))
   }
-
 }

@@ -1,10 +1,12 @@
 package akka.actor
 
+import language.postfixOps
+
 import org.scalatest.BeforeAndAfterEach
-import akka.util.duration._
+import scala.concurrent.util.duration._
 import java.util.concurrent.{ CountDownLatch, ConcurrentLinkedQueue, TimeUnit }
 import akka.testkit._
-import akka.dispatch.Await
+import scala.concurrent.Await
 import akka.pattern.ask
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -18,7 +20,12 @@ class SchedulerSpec extends AkkaSpec with BeforeAndAfterEach with DefaultTimeout
   }
 
   override def afterEach {
-    while (cancellables.peek() ne null) { Option(cancellables.poll()).foreach(_.cancel()) }
+    while (cancellables.peek() ne null) {
+      for (c ← Option(cancellables.poll())) {
+        c.cancel()
+        c.isCancelled must be === true
+      }
+    }
   }
 
   "A Scheduler" must {
@@ -43,7 +50,7 @@ class SchedulerSpec extends AkkaSpec with BeforeAndAfterEach with DefaultTimeout
       assert(countDownLatch2.await(2, TimeUnit.SECONDS))
     }
 
-    "should stop continuous scheduling if the receiving actor has been terminated" taggedAs TimingTest in {
+    "stop continuous scheduling if the receiving actor has been terminated" taggedAs TimingTest in {
       val actor = system.actorOf(Props(new Actor {
         def receive = {
           case x ⇒ testActor ! x
@@ -52,12 +59,12 @@ class SchedulerSpec extends AkkaSpec with BeforeAndAfterEach with DefaultTimeout
 
       // run immediately and then every 100 milliseconds
       collectCancellable(system.scheduler.schedule(0 milliseconds, 100 milliseconds, actor, "msg"))
-      expectNoMsg(1 second)
+      expectMsg("msg")
 
       // stop the actor and, hence, the continuous messaging from happening
       actor ! PoisonPill
 
-      expectMsg("msg")
+      expectNoMsg(1 second)
     }
 
     "schedule once" in {
@@ -108,9 +115,9 @@ class SchedulerSpec extends AkkaSpec with BeforeAndAfterEach with DefaultTimeout
       val timeout = collectCancellable(system.scheduler.schedule(initialDelay, delay) {
         ticks.incrementAndGet()
       })
-      10.milliseconds.dilated.sleep()
+      Thread.sleep(10.milliseconds.dilated.toMillis)
       timeout.cancel()
-      (initialDelay + 100.milliseconds.dilated).sleep()
+      Thread.sleep((initialDelay + 100.milliseconds.dilated).toMillis)
 
       ticks.get must be(0)
     }
@@ -123,9 +130,9 @@ class SchedulerSpec extends AkkaSpec with BeforeAndAfterEach with DefaultTimeout
       val timeout = collectCancellable(system.scheduler.schedule(initialDelay, delay) {
         ticks.incrementAndGet()
       })
-      (initialDelay + 100.milliseconds.dilated).sleep()
+      Thread.sleep((initialDelay + 100.milliseconds.dilated).toMillis)
       timeout.cancel()
-      (delay + 100.milliseconds.dilated).sleep()
+      Thread.sleep((delay + 100.milliseconds.dilated).toMillis)
 
       ticks.get must be(1)
     }

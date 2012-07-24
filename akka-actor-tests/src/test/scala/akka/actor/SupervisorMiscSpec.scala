@@ -3,14 +3,17 @@
  */
 package akka.actor
 
+import language.postfixOps
+
 import akka.testkit.{ filterEvents, EventFilter }
-import akka.dispatch.{ PinnedDispatcher, Dispatchers, Await }
+import scala.concurrent.Await
+import akka.dispatch.{ PinnedDispatcher, Dispatchers }
 import java.util.concurrent.{ TimeUnit, CountDownLatch }
 import akka.testkit.AkkaSpec
 import akka.testkit.DefaultTimeout
 import akka.pattern.ask
-import akka.util.duration._
-import akka.util.NonFatal
+import scala.concurrent.util.duration._
+import scala.util.control.NonFatal
 
 object SupervisorMiscSpec {
   val config = """
@@ -37,7 +40,7 @@ class SupervisorMiscSpec extends AkkaSpec(SupervisorMiscSpec.config) with Defaul
 
         val workerProps = Props(new Actor {
           override def postRestart(cause: Throwable) { countDownLatch.countDown() }
-          protected def receive = {
+          def receive = {
             case "status" ⇒ this.sender ! "OK"
             case _        ⇒ this.context.stop(self)
           }
@@ -55,19 +58,19 @@ class SupervisorMiscSpec extends AkkaSpec(SupervisorMiscSpec.config) with Defaul
         actor4 ! Kill
 
         countDownLatch.await(10, TimeUnit.SECONDS)
-        assert(Await.result(actor1 ? "status", timeout.duration) == "OK", "actor1 is shutdown")
-        assert(Await.result(actor2 ? "status", timeout.duration) == "OK", "actor2 is shutdown")
-        assert(Await.result(actor3 ? "status", timeout.duration) == "OK", "actor3 is shutdown")
-        assert(Await.result(actor4 ? "status", timeout.duration) == "OK", "actor4 is shutdown")
+
+        Seq("actor1" -> actor1, "actor2" -> actor2, "actor3" -> actor3, "actor4" -> actor4) map {
+          case (id, ref) ⇒ (id, ref ? "status")
+        } foreach {
+          case (id, f) ⇒ (id, Await.result(f, timeout.duration)) must be === ((id, "OK"))
+        }
       }
     }
 
     "be able to create named children in its constructor" in {
       val a = system.actorOf(Props(new Actor {
         context.actorOf(Props.empty, "bob")
-        def receive = {
-          case x: Exception ⇒ throw x
-        }
+        def receive = { case x: Exception ⇒ throw x }
         override def preStart(): Unit = testActor ! "preStart"
       }))
       val m = "weird message"
@@ -123,23 +126,20 @@ class SupervisorMiscSpec extends AkkaSpec(SupervisorMiscSpec.config) with Defaul
 
     "be able to create a similar kid in the fault handling strategy" in {
       val parent = system.actorOf(Props(new Actor {
-
         override val supervisorStrategy = new OneForOneStrategy()(SupervisorStrategy.defaultStrategy.decider) {
           override def handleChildTerminated(context: ActorContext, child: ActorRef, children: Iterable[ActorRef]): Unit = {
             val newKid = context.actorOf(Props.empty, child.path.name)
-            testActor ! {
-              if ((newKid ne child) && newKid.path == child.path) "green"
-              else "red"
-            }
+            testActor ! { if ((newKid ne child) && newKid.path == child.path) "green" else "red" }
           }
         }
 
-        def receive = {
-          case "engage" ⇒ context.stop(context.actorOf(Props.empty, "Robert"))
-        }
+        def receive = { case "engage" ⇒ context.stop(context.actorOf(Props.empty, "Robert")) }
       }))
       parent ! "engage"
       expectMsg("green")
+      EventFilter[IllegalStateException]("handleChildTerminated failed", occurrences = 1) intercept {
+        system.stop(parent)
+      }
     }
 
   }

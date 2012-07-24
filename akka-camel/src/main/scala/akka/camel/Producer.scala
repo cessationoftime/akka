@@ -6,27 +6,23 @@ package akka.camel
 
 import akka.actor.Actor
 import internal.CamelExchangeAdapter
-import org.apache.camel.{ Exchange, ExchangePattern, AsyncCallback }
+import akka.actor.Status.Failure
+import org.apache.camel.{ Endpoint, Exchange, ExchangePattern, AsyncCallback }
+import org.apache.camel.processor.SendProcessor
 
 /**
  * Support trait for producing messages to Camel endpoints.
  *
  * @author Martin Krasser
  */
-trait ProducerSupport { this: Actor ⇒
-  protected[this] implicit def camel = CamelExtension(context.system)
+trait ProducerSupport extends CamelSupport { this: Actor ⇒
 
-  /**
-   * camelContext implicit is useful when using advanced methods of CamelMessage.
-   */
-  protected[this] implicit def camelContext = camel.context
-
-  protected[this] lazy val (endpoint, processor) = camel.registerProducer(self, endpointUri)
+  protected[this] lazy val (endpoint: Endpoint, processor: SendProcessor) = camel.registerProducer(self, endpointUri)
 
   /**
    * CamelMessage headers to copy by default from request message to response-message.
    */
-  private val headersToCopyDefault = Set(CamelMessage.MessageExchangeId)
+  private val headersToCopyDefault: Set[String] = Set(CamelMessage.MessageExchangeId)
 
   /**
    * If set to false (default), this producer expects a response message from the Camel endpoint.
@@ -63,20 +59,21 @@ trait ProducerSupport { this: Actor ⇒
    * @param pattern exchange pattern
    */
   protected def produce(msg: Any, pattern: ExchangePattern): Unit = {
-    implicit def toExchangeAdapter(exchange: Exchange): CamelExchangeAdapter = new CamelExchangeAdapter(exchange)
+    // Need copies of sender reference here since the callback could be done
+    // later by another thread.
+    val producer = self
+    val originalSender = sender
 
     val cmsg = CamelMessage.canonicalize(msg)
-    val exchange = endpoint.createExchange(pattern)
-    exchange.setRequest(cmsg)
-    processor.process(exchange, new AsyncCallback {
-      val producer = self
-      // Need copies of sender reference here since the callback could be done
-      // later by another thread.
-      val originalSender = sender
+    val xchg = new CamelExchangeAdapter(endpoint.createExchange(pattern))
+
+    xchg.setRequest(cmsg)
+
+    processor.process(xchg.exchange, new AsyncCallback {
       // Ignoring doneSync, sending back async uniformly.
       def done(doneSync: Boolean): Unit = producer.tell(
-        if (exchange.isFailed) FailureResult(exchange.toFailureMessage(cmsg.headers(headersToCopy)))
-        else MessageResult(exchange.toResponseMessage(cmsg.headers(headersToCopy))), originalSender)
+        if (xchg.exchange.isFailed) xchg.toFailureResult(cmsg.headers(headersToCopy))
+        else MessageResult(xchg.toResponseMessage(cmsg.headers(headersToCopy))), originalSender)
     })
   }
 
@@ -89,13 +86,11 @@ trait ProducerSupport { this: Actor ⇒
    */
   protected def produce: Receive = {
     case res: MessageResult ⇒ routeResponse(res.message)
-    case res: FailureResult ⇒ routeResponse(res.failure)
-    case msg ⇒ {
-      if (oneway)
-        produce(transformOutgoingMessage(msg), ExchangePattern.InOnly)
-      else
-        produce(transformOutgoingMessage(msg), ExchangePattern.InOut)
-    }
+    case res: FailureResult ⇒
+      val e = new AkkaCamelException(res.cause, res.headers)
+      routeResponse(Failure(e))
+      throw e
+    case msg ⇒ produce(transformOutgoingMessage(msg), if (oneway) ExchangePattern.InOnly else ExchangePattern.InOut)
   }
 
   /**
@@ -130,10 +125,10 @@ trait ProducerSupport { this: Actor ⇒
 trait Producer extends ProducerSupport { this: Actor ⇒
 
   /**
-   * Default implementation of Actor.receive. Any messages received by this actors
+   * Implementation of Actor.receive. Any messages received by this actor
    * will be produced to the endpoint specified by <code>endpointUri</code>.
    */
-  protected def receive = produce
+  final def receive: Actor.Receive = produce
 }
 
 /**
@@ -144,7 +139,7 @@ private case class MessageResult(message: CamelMessage)
 /**
  * @author Martin Krasser
  */
-private case class FailureResult(failure: Failure)
+private case class FailureResult(cause: Throwable, headers: Map[String, Any] = Map.empty)
 
 /**
  * A one-way producer.
@@ -152,6 +147,6 @@ private case class FailureResult(failure: Failure)
  * @author Martin Krasser
  */
 trait Oneway extends Producer { this: Actor ⇒
-  override def oneway = true
+  override def oneway: Boolean = true
 }
 

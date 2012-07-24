@@ -3,18 +3,23 @@
  */
 package akka.pattern
 
+import akka.actor.Scheduler
+import scala.concurrent.ExecutionContext
+import java.util.concurrent.Callable
+
 object Patterns {
   import akka.actor.{ ActorRef, ActorSystem }
-  import akka.dispatch.Future
-  import akka.pattern.{ ask ⇒ scalaAsk, pipe ⇒ scalaPipe }
-  import akka.util.{ Timeout, Duration }
+  import akka.pattern.{ ask ⇒ scalaAsk, pipe ⇒ scalaPipe, gracefulStop ⇒ scalaGracefulStop, after ⇒ scalaAfter }
+  import akka.util.Timeout
+  import scala.concurrent.Future
+  import scala.concurrent.util.Duration
 
   /**
    * <i>Java API for `akka.pattern.ask`:</i>
-   * Sends a message asynchronously and returns a [[akka.dispatch.Future]]
+   * Sends a message asynchronously and returns a [[scala.concurrent.Future]]
    * holding the eventual reply message; this means that the target actor
    * needs to send the result to the `sender` reference provided. The Future
-   * will be completed with an [[akka.actor.AskTimeoutException]] after the
+   * will be completed with an [[akka.pattern.AskTimeoutException]] after the
    * given timeout has expired; this is independent from any timeout applied
    * while awaiting a result for this future (i.e. in
    * `Await.result(..., timeout)`).
@@ -42,10 +47,10 @@ object Patterns {
 
   /**
    * <i>Java API for `akka.pattern.ask`:</i>
-   * Sends a message asynchronously and returns a [[akka.dispatch.Future]]
+   * Sends a message asynchronously and returns a [[scala.concurrent.Future]]
    * holding the eventual reply message; this means that the target actor
    * needs to send the result to the `sender` reference provided. The Future
-   * will be completed with an [[akka.actor.AskTimeoutException]] after the
+   * will be completed with an [[akka.pattern.AskTimeoutException]] after the
    * given timeout has expired; this is independent from any timeout applied
    * while awaiting a result for this future (i.e. in
    * `Await.result(..., timeout)`).
@@ -72,7 +77,7 @@ object Patterns {
   def ask(actor: ActorRef, message: Any, timeoutMillis: Long): Future[AnyRef] = scalaAsk(actor, message)(new Timeout(timeoutMillis)).asInstanceOf[Future[AnyRef]]
 
   /**
-   * Register an onComplete callback on this [[akka.dispatch.Future]] to send
+   * Register an onComplete callback on this [[scala.concurrent.Future]] to send
    * the result to the given actor reference. Returns the original Future to
    * allow method chaining.
    *
@@ -86,18 +91,32 @@ object Patterns {
    *   Patterns.pipe(transformed).to(nextActor);
    * }}}
    */
-  def pipe[T](future: Future[T]): PipeableFuture[T] = scalaPipe(future)
+  def pipe[T](future: Future[T], context: ExecutionContext): PipeableFuture[T] = scalaPipe(future)(context)
 
   /**
-   * Returns a [[akka.dispatch.Future]] that will be completed with success (value `true`) when
+   * Returns a [[scala.concurrent.Future]] that will be completed with success (value `true`) when
    * existing messages of the target actor has been processed and the actor has been
    * terminated.
    *
    * Useful when you need to wait for termination or compose ordered termination of several actors.
    *
-   * If the target actor isn't terminated within the timeout the [[akka.dispatch.Future]]
-   * is completed with failure [[akka.actor.ActorTimeoutException]].
+   * If the target actor isn't terminated within the timeout the [[scala.concurrent.Future]]
+   * is completed with failure [[akka.pattern.AskTimeoutException]].
    */
   def gracefulStop(target: ActorRef, timeout: Duration, system: ActorSystem): Future[java.lang.Boolean] =
-    akka.pattern.gracefulStop(target, timeout)(system).asInstanceOf[Future[java.lang.Boolean]]
+    scalaGracefulStop(target, timeout)(system).asInstanceOf[Future[java.lang.Boolean]]
+
+  /**
+   * Returns a [[scala.concurrent.Future]] that will be completed with the success or failure of the provided Callable
+   * after the specified duration.
+   */
+  def after[T](duration: Duration, scheduler: Scheduler, context: ExecutionContext, value: Callable[Future[T]]): Future[T] =
+    scalaAfter(duration, scheduler)(value.call())(context)
+
+  /**
+   * Returns a [[scala.concurrent.Future]] that will be completed with the success or failure of the provided value
+   * after the specified duration.
+   */
+  def after[T](duration: Duration, scheduler: Scheduler, context: ExecutionContext, value: Future[T]): Future[T] =
+    scalaAfter(duration, scheduler)(value)(context)
 }

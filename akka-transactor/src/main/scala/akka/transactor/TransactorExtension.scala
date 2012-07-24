@@ -7,7 +7,7 @@ import akka.actor.{ ActorSystem, ExtensionId, ExtensionIdProvider, ExtendedActor
 import akka.actor.Extension
 import com.typesafe.config.Config
 import akka.util.Timeout
-import akka.util.Duration
+import scala.concurrent.util.Duration
 import java.util.concurrent.TimeUnit.MILLISECONDS
 
 /**
@@ -15,11 +15,11 @@ import java.util.concurrent.TimeUnit.MILLISECONDS
  */
 object TransactorExtension extends ExtensionId[TransactorSettings] with ExtensionIdProvider {
   override def get(system: ActorSystem): TransactorSettings = super.get(system)
-  override def lookup = TransactorExtension
+  override def lookup: TransactorExtension.type = TransactorExtension
   override def createExtension(system: ExtendedActorSystem): TransactorSettings = new TransactorSettings(system.settings.config)
 }
 
 class TransactorSettings(val config: Config) extends Extension {
   import config._
-  val CoordinatedTimeout = Timeout(Duration(getMilliseconds("akka.transactor.coordinated-timeout"), MILLISECONDS))
+  val CoordinatedTimeout: Timeout = Timeout(Duration(getMilliseconds("akka.transactor.coordinated-timeout"), MILLISECONDS))
 }

@@ -5,20 +5,23 @@
 package akka.dispatch
 
 import java.util.Collection
-import akka.util.Duration
-import akka.jsr166y._
-import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.BlockingQueue
-import java.util.concurrent.Callable
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.RejectedExecutionHandler
-import java.util.concurrent.RejectedExecutionException
-import java.util.concurrent.SynchronousQueue
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.ThreadFactory
-import java.util.concurrent.ThreadPoolExecutor
+import scala.concurrent.{ Awaitable, BlockContext, CanAwait }
+import scala.concurrent.util.Duration
+import scala.concurrent.forkjoin._
+import java.util.concurrent.{
+  ArrayBlockingQueue,
+  BlockingQueue,
+  Callable,
+  ExecutorService,
+  LinkedBlockingQueue,
+  RejectedExecutionHandler,
+  RejectedExecutionException,
+  SynchronousQueue,
+  TimeUnit,
+  ThreadFactory,
+  ThreadPoolExecutor
+}
+import java.util.concurrent.atomic.{ AtomicReference, AtomicLong }
 
 object ThreadPoolConfig {
   type QueueFactory = () ⇒ BlockingQueue[Runnable]
@@ -29,30 +32,20 @@ object ThreadPoolConfig {
   val defaultTimeout: Duration = Duration(60000L, TimeUnit.MILLISECONDS)
   val defaultRejectionPolicy: RejectedExecutionHandler = new SaneRejectedExecutionHandler()
 
-  def scaledPoolSize(floor: Int, multiplier: Double, ceiling: Int): Int = {
-    import scala.math.{ min, max }
-    min(max((Runtime.getRuntime.availableProcessors * multiplier).ceil.toInt, floor), ceiling)
-  }
+  def scaledPoolSize(floor: Int, multiplier: Double, ceiling: Int): Int =
+    math.min(math.max((Runtime.getRuntime.availableProcessors * multiplier).ceil.toInt, floor), ceiling)
 
-  def arrayBlockingQueue(capacity: Int, fair: Boolean): QueueFactory =
-    () ⇒ new ArrayBlockingQueue[Runnable](capacity, fair)
+  def arrayBlockingQueue(capacity: Int, fair: Boolean): QueueFactory = () ⇒ new ArrayBlockingQueue[Runnable](capacity, fair)
 
-  def synchronousQueue(fair: Boolean): QueueFactory =
-    () ⇒ new SynchronousQueue[Runnable](fair)
+  def synchronousQueue(fair: Boolean): QueueFactory = () ⇒ new SynchronousQueue[Runnable](fair)
 
-  def linkedBlockingQueue(): QueueFactory =
-    () ⇒ new LinkedBlockingQueue[Runnable]()
+  def linkedBlockingQueue(): QueueFactory = () ⇒ new LinkedBlockingQueue[Runnable]()
 
-  def linkedBlockingQueue(capacity: Int): QueueFactory =
-    () ⇒ new LinkedBlockingQueue[Runnable](capacity)
+  def linkedBlockingQueue(capacity: Int): QueueFactory = () ⇒ new LinkedBlockingQueue[Runnable](capacity)
 
-  def reusableQueue(queue: BlockingQueue[Runnable]): QueueFactory =
-    () ⇒ queue
+  def reusableQueue(queue: BlockingQueue[Runnable]): QueueFactory = () ⇒ queue
 
-  def reusableQueue(queueFactory: QueueFactory): QueueFactory = {
-    val queue = queueFactory()
-    () ⇒ queue
-  }
+  def reusableQueue(queueFactory: QueueFactory): QueueFactory = reusableQueue(queueFactory())
 }
 
 /**
@@ -157,12 +150,27 @@ case class ThreadPoolConfigBuilder(config: ThreadPoolConfig) {
   def setQueueFactory(newQueueFactory: QueueFactory): ThreadPoolConfigBuilder =
     this.copy(config = config.copy(queueFactory = newQueueFactory))
 
-  def configure(fs: Option[Function[ThreadPoolConfigBuilder, ThreadPoolConfigBuilder]]*): ThreadPoolConfigBuilder = fs.foldLeft(this)((c, f) ⇒ f.map(_(c)).getOrElse(c))
+  def configure(fs: Option[Function[ThreadPoolConfigBuilder, ThreadPoolConfigBuilder]]*): ThreadPoolConfigBuilder =
+    fs.foldLeft(this)((c, f) ⇒ f.map(_(c)).getOrElse(c))
 }
 
 object MonitorableThreadFactory {
   val doNothing: Thread.UncaughtExceptionHandler =
     new Thread.UncaughtExceptionHandler() { def uncaughtException(thread: Thread, cause: Throwable) = () }
+
+  private[akka] class AkkaForkJoinWorkerThread(_pool: ForkJoinPool) extends ForkJoinWorkerThread(_pool) with BlockContext {
+    override def blockOn[T](thunk: ⇒ T)(implicit permission: CanAwait): T = {
+      val result = new AtomicReference[Option[T]](None)
+      ForkJoinPool.managedBlock(new ForkJoinPool.ManagedBlocker {
+        def block(): Boolean = {
+          result.set(Some(thunk))
+          true
+        }
+        def isReleasable = result.get.isDefined
+      })
+      result.get.get // Exception intended if None
+    }
+  }
 }
 
 case class MonitorableThreadFactory(name: String,
@@ -173,7 +181,7 @@ case class MonitorableThreadFactory(name: String,
   protected val counter = new AtomicLong
 
   def newThread(pool: ForkJoinPool): ForkJoinWorkerThread = {
-    val t = wire(ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool))
+    val t = wire(new MonitorableThreadFactory.AkkaForkJoinWorkerThread(pool))
     // Name of the threads for the ForkJoinPool are not customizable. Change it here.
     t.setName(name + "-" + counter.incrementAndGet())
     t
