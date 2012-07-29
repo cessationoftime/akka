@@ -163,9 +163,17 @@ class RemoteActorRefProvider(
         }
       }
 
+      def allow(natAddress: Address): Boolean = {
+        val settings = remoteSettings //have to do this to do the import or else err "stable identifier required"
+        import settings.PublicAddresses
+
+        if (natAddress.host.isEmpty || natAddress.port.isEmpty) false //Partial addresses are never OK
+        else PublicAddresses.nonEmpty && PublicAddresses.contains(natAddress.host.get + ":" + natAddress.port.get)
+      }
+
       Iterator(props.deploy) ++ deployment.iterator reduce ((a, b) ⇒ b withFallback a) match {
         case d @ Deploy(_, _, _, RemoteScope(addr)) ⇒
-          if (addr == rootPath.address || addr == transport.address) {
+          if (addr == rootPath.address || addr == transport.address || allow(addr)) {
             local.actorOf(system, props, supervisor, path, false, deployment.headOption, false)
           } else {
             val rpath = RootActorPath(addr) / "remote" / transport.address.hostPort / path.elements

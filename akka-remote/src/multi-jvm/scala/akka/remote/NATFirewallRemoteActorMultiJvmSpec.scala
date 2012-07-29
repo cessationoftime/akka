@@ -17,7 +17,7 @@ object NATFirewallRemoteActorMultiJvmSpec {
 
   class SomeActor extends Actor with Serializable {
     def receive = {
-      case "hi" ⇒ sender ! "hello"
+      case "hi" => sender ! "hello"
     }
   }
 
@@ -54,8 +54,10 @@ class NATFirewallRemoteActorMultiJvmNode1 extends AkkaSpec(setup("", "0.0.0.0", 
   "___" must {
     "___" in {
       barrier("start")
-
       barrier("done")
+	  
+	    barrier("start2")
+      barrier("done2")
     }
   }
 }
@@ -68,8 +70,10 @@ class NATFirewallRemoteActorMultiJvmNode2 extends AkkaSpec(setup(""""127.0.0.1:3
   "___" must {
     "___" in {
       barrier("start")
-
       barrier("done")
+	  
+	   barrier("start2")
+      barrier("done2")
     }
   }
 }
@@ -92,20 +96,49 @@ class NATFirewallRemoteActorMultiJvmNode3 extends AkkaSpec(setup("", "127.0.0.1"
       Await.result(actor2 ? "hi", 250 millis).asInstanceOf[String] must be("hello")
 
 
-      val actor5 = system.actorFor("akka://notnat@127.0.0.1:2552/user/service-hello")
-      val actor6 = system.actorFor("akka://notnat@127.0.0.1:3663/user/service-hello")
+      //val actor5 = system.actorFor("akka://notnat@127.0.0.1:2552/user/service-hello")
+      //val actor6 = system.actorFor("akka://notnat@127.0.0.1:3663/user/service-hello")
 
 
-      evaluating {
-        Await.result(actor5 ? "hi", 250 millis).asInstanceOf[String]
-      } must produce[TimeoutException]
+     // evaluating {
+     //   Await.result(actor5 ? "hi", 250 millis).asInstanceOf[String]
+     // } must produce[TimeoutException]
 
-      evaluating {
-        Await.result(actor6 ? "hi", 250 millis).asInstanceOf[String]
-      } must produce[TimeoutException]
+     // evaluating {
+     //   Await.result(actor6 ? "hi", 250 millis).asInstanceOf[String]
+     // } must produce[TimeoutException]
 
       barrier("done")
     }
+	"allow the dynamic deployment of actors across NAT" in {
+	barrier("start2")
+	        import akka.actor.{ Props, Deploy, Address, AddressFromURIString }
+            import akka.remote.RemoteScope
+			
+		object RemoteAkkaConnection {
+			val ip: String = "127.0.0.1"
+			val port: String = "3663"
+			val ipPort = ip + ":" + port
+			val actorNameString = ip.replace(".", "") + port
+			val uriString = """akka://nat@""" + ipPort
+			
+			
+			val serviceHelloNewActorName = "service-hello" + actorNameString
+		}
+		import RemoteAkkaConnection._
+		
+		//get a reference to the actor on the remote peer.
+		val originalRemoteActor = system.actorFor(uriString + """/user/service-hello""")
+		
+		Await.result(originalRemoteActor ? "hi", 250 millis).asInstanceOf[String] must be("hello")
+		
+		val address = AddressFromURIString(uriString)
+		val deployedActor = system.actorOf(Props[SomeActor].withDeploy(Deploy(scope = RemoteScope(address))), serviceHelloNewActorName)
+		
+		Await.result(deployedActor ? "hi", 250 millis).asInstanceOf[String] must be("hello")     
+		
+		barrier("done2")
+	}
   }
 }
 
