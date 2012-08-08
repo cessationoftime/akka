@@ -163,17 +163,9 @@ class RemoteActorRefProvider(
         }
       }
 
-      def allow(natAddress: Address): Boolean = {
-        val settings = remoteSettings //have to do this to do the import or else err "stable identifier required"
-        import settings.PublicAddresses
-
-        if (natAddress.host.isEmpty || natAddress.port.isEmpty) false //Partial addresses are never OK
-        else PublicAddresses.nonEmpty && PublicAddresses.contains(natAddress.host.get + ":" + natAddress.port.get)
-      }
-
       Iterator(props.deploy) ++ deployment.iterator reduce ((a, b) ⇒ b withFallback a) match {
         case d @ Deploy(_, _, _, RemoteScope(addr)) ⇒
-          if (addr == rootPath.address || addr == transport.address || allow(addr)) {
+          if (isSelfAddress(addr)) {
             local.actorOf(system, props, supervisor, path, false, deployment.headOption, false)
           } else {
             val rpath = RootActorPath(addr) / "remote" / transport.address.hostPort / path.elements
@@ -186,13 +178,23 @@ class RemoteActorRefProvider(
     }
   }
 
+  def allowNAT(natAddress: Address): Boolean = {
+    val settings = remoteSettings //have to do this to do the import or else err "stable identifier required"
+    import settings.PublicAddresses
+
+    if (natAddress.host.isEmpty || natAddress.port.isEmpty) false //Partial addresses are never OK
+    else PublicAddresses.nonEmpty && PublicAddresses.contains(natAddress.host.get + ":" + natAddress.port.get)
+  }
+
+  def isSelfAddress(address: Address) = address == rootPath.address || address == transport.address || allowNAT(address)
+
   def actorFor(path: ActorPath): InternalActorRef =
-    if (path.address == rootPath.address || path.address == transport.address) actorFor(rootGuardian, path.elements)
+    if (isSelfAddress(path.address)) actorFor(rootGuardian, path.elements)
     else new RemoteActorRef(this, transport, path, Nobody)
 
   def actorFor(ref: InternalActorRef, path: String): InternalActorRef = path match {
     case ActorPathExtractor(address, elems) ⇒
-      if (address == rootPath.address || address == transport.address) actorFor(rootGuardian, elems)
+      if (isSelfAddress(address)) actorFor(rootGuardian, elems)
       else new RemoteActorRef(this, transport, new RootActorPath(address) / elems, Nobody)
     case _ ⇒ local.actorFor(ref, path)
   }
@@ -212,8 +214,11 @@ class RemoteActorRefProvider(
   def getExternalAddressFor(addr: Address): Option[Address] = {
     val ta = transport.address
     val ra = rootPath.address
+
+    object IsNat { def unapply(a: Address): Boolean = allowNAT(a) }
+
     addr match {
-      case `ta` | `ra`                          ⇒ Some(rootPath.address)
+      case `ta` | `ra` | IsNat()                ⇒ Some(rootPath.address)
       case Address("akka", _, Some(_), Some(_)) ⇒ Some(transport.address)
       case _                                    ⇒ None
     }
