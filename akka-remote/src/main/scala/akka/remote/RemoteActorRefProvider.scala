@@ -165,7 +165,7 @@ class RemoteActorRefProvider(
 
       Iterator(props.deploy) ++ deployment.iterator reduce ((a, b) ⇒ b withFallback a) match {
         case d @ Deploy(_, _, _, RemoteScope(addr)) ⇒
-          if (isSelfAddress(addr)) {
+          if (addr == rootPath.address || addr == transport.address || allow(addr)) {
             local.actorOf(system, props, supervisor, path, false, deployment.headOption, false)
           } else {
             val rpath = RootActorPath(addr) / "remote" / transport.address.hostPort / path.elements
@@ -186,7 +186,7 @@ class RemoteActorRefProvider(
     else PublicAddresses.nonEmpty && PublicAddresses.contains(natAddress.host.get + ":" + natAddress.port.get)
   }
 
-  def isSelfAddress(address: Address) = address == rootPath.address || address == transport.address || allowNAT(address)
+  def isSelfAddress(address: Address) = address == rootPath.address || address == transport.address
 
   def actorFor(path: ActorPath): InternalActorRef =
     if (isSelfAddress(path.address)) actorFor(rootGuardian, path.elements)
@@ -218,7 +218,8 @@ class RemoteActorRefProvider(
     object IsNat { def unapply(a: Address): Boolean = allowNAT(a) }
 
     addr match {
-      case `ta` | `ra` | IsNat()                ⇒ Some(rootPath.address)
+      //case `ta` | `ra` | IsNat()                ⇒ Some(rootPath.address)
+      case `ta` | `ra`                          ⇒ Some(rootPath.address)
       case Address("akka", _, Some(_), Some(_)) ⇒ Some(transport.address)
       case _                                    ⇒ None
     }
