@@ -165,7 +165,7 @@ class RemoteActorRefProvider(
 
       Iterator(props.deploy) ++ deployment.iterator reduce ((a, b) ⇒ b withFallback a) match {
         case d @ Deploy(_, _, _, RemoteScope(addr)) ⇒
-          if (addr == rootPath.address || addr == transport.address || allow(addr)) {
+          if (addr == rootPath.address || addr == transport.address || allowNAT(addr)) {
             local.actorOf(system, props, supervisor, path, false, deployment.headOption, false)
           } else {
             val rpath = RootActorPath(addr) / "remote" / transport.address.hostPort / path.elements
