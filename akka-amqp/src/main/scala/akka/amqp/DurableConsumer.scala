@@ -74,7 +74,7 @@ class DurableConsumer(durableConnection: DurableConnection,
       })
       consumerTag.set(Some(tag))
       latch.countDown()
-      if (queueName.substring(0, 8) == "amq.gen-") deliveryHandler ! GeneratedQueueDeclared(queueName)
+	  if (queueName.take(8) == "amq.gen-") deliveryHandler ! GeneratedQueueDeclared(queueName)
   }
 
   def awaitStart(timeout: Long = 5, unit: TimeUnit = TimeUnit.SECONDS) = {
