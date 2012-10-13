@@ -17,7 +17,7 @@ object LookupRemoteActorMultiJvmSpec extends MultiNodeConfig {
       case "identify" ⇒ sender ! self
     }
   }
-
+  
   commonConfig(debugConfig(on = false))
 
   val master = role("master")
