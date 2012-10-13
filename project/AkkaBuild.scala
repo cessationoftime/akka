@@ -139,7 +139,7 @@ object AkkaBuild extends Build {
       previousArtifact := akkaPreviousArtifact("akka-remote")
     )
   ) configs (MultiJvm)
-
+  
   lazy val cluster = Project(
     id = "akka-cluster-experimental",
     base = file("akka-cluster"),
@@ -706,7 +706,6 @@ object Dependency {
   val uncommonsMath = "org.uncommons.maths"         % "uncommons-maths"              % "1.2.2a"      // ApacheV2
   val ariesBlueprint = "org.apache.aries.blueprint" % "org.apache.aries.blueprint"   % "0.3.2"       // ApacheV2
   val osgiCore      = "org.osgi"                    % "org.osgi.core"                % "4.2.0"       // ApacheV2
-
 
   // Camel Sample
   val camelJetty  = "org.apache.camel"            % "camel-jetty"                  % camelCore.revision // ApacheV2

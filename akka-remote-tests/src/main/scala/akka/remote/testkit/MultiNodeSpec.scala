@@ -382,6 +382,7 @@ abstract class MultiNodeSpec(val myself: RoleName, _system: ActorSystem, _roles:
   deployments(myself) foreach { str ⇒
     val deployString = (str /: replacements) {
       case (base, r @ Replacement(tag, _)) ⇒
+
         base.indexOf(tag) match {
           case -1 ⇒ base
           case start ⇒
