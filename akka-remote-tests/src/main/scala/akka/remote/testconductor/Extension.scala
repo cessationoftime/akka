@@ -39,6 +39,7 @@ object TestConductor extends ExtensionKey[TestConductorExt] {
  *
  */
 class TestConductorExt(val system: ExtendedActorSystem) extends Extension with Conductor with Player {
+
   object Settings {
     val config = system.settings.config
 

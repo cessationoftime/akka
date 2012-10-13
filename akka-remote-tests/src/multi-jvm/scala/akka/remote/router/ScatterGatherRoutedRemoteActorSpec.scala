@@ -50,7 +50,7 @@ class ScatterGatherRoutedRemoteActorMultiJvmNode4 extends ScatterGatherRoutedRem
 class ScatterGatherRoutedRemoteActorSpec extends MultiNodeSpec(ScatterGatherRoutedRemoteActorMultiJvmSpec)
   with STMultiNodeSpec with ImplicitSender with DefaultTimeout {
   import ScatterGatherRoutedRemoteActorMultiJvmSpec._
- 
+
   def initialParticipants = roles.size
 
   "A new remote actor configured with a ScatterGatherFirstCompleted router" must {
