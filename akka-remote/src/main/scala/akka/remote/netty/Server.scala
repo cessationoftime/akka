@@ -23,7 +23,7 @@ private[akka] class NettyRemoteServer(val netty: NettyRemoteTransport) {
 
   import netty.settings
 
-  val ip = InetAddress.getByName(settings.Hostname)
+  protected val ip = InetAddress.getByName(settings.PublicHostname)
 
   private val factory =
     settings.UseDispatcherForIO match {
