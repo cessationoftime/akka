@@ -3,7 +3,7 @@
  */
 
 package akka.remote
-
+import NatHelper._
 import akka.actor._
 import akka.dispatch._
 import akka.event.{ Logging, LoggingAdapter, EventStream }
@@ -154,7 +154,7 @@ class RemoteActorRefProvider(
 
       Iterator(props.deploy) ++ deployment.iterator reduce ((a, b) ⇒ b withFallback a) match {
         case d @ Deploy(_, _, _, RemoteScope(addr)) ⇒
-          if (addr == rootPath.address || addr == transport.address) {
+          if (isSelfAddress(addr)) {
             local.actorOf(system, props, supervisor, path, false, deployment.headOption, false, async)
           } else {
             val rpath = RootActorPath(addr) / "remote" / transport.address.hostPort / path.elements
@@ -166,14 +166,17 @@ class RemoteActorRefProvider(
       }
     }
   }
-
+  
+   def isSelfAddress(addr: Address) = addr == rootPath.address || addr == transport.address || allowNAT(addr,remoteSettings)
+ // def isSelfAddress(address: Address) = address == rootPath.address || address == transport.address
+  
   def actorFor(path: ActorPath): InternalActorRef =
-    if (path.address == rootPath.address || path.address == transport.address) actorFor(rootGuardian, path.elements)
+    if (isSelfAddress(path.address)) actorFor(rootGuardian, path.elements)
     else new RemoteActorRef(this, transport, path, Nobody)
 
   def actorFor(ref: InternalActorRef, path: String): InternalActorRef = path match {
     case ActorPathExtractor(address, elems) ⇒
-      if (address == rootPath.address || address == transport.address) actorFor(rootGuardian, elems)
+      if (isSelfAddress(address)) actorFor(rootGuardian, elems)
       else new RemoteActorRef(this, transport, new RootActorPath(address) / elems, Nobody)
     case _ ⇒ local.actorFor(ref, path)
   }

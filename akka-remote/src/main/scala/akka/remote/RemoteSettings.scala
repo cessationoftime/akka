@@ -6,7 +6,7 @@ package akka.remote
 import com.typesafe.config.Config
 import scala.concurrent.util.Duration
 import java.util.concurrent.TimeUnit.MILLISECONDS
-
+import collection.JavaConverters._
 class RemoteSettings(val config: Config, val systemName: String) {
   import config._
   val RemoteTransport: String = getString("akka.remote.transport")
@@ -15,4 +15,5 @@ class RemoteSettings(val config: Config, val systemName: String) {
   val RemoteSystemDaemonAckTimeout: Duration = Duration(getMilliseconds("akka.remote.remote-daemon-ack-timeout"), MILLISECONDS)
   val UntrustedMode: Boolean = getBoolean("akka.remote.untrusted-mode")
   val LogRemoteLifeCycleEvents: Boolean = getBoolean("akka.remote.log-remote-lifecycle-events")
+  val PublicAddresses = getStringList("akka.remote.public-addresses").asScala.toSet
 }
