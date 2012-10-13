@@ -166,10 +166,10 @@ class RemoteActorRefProvider(
       }
     }
   }
-  
-   def isSelfAddress(addr: Address) = addr == rootPath.address || addr == transport.address || allowNAT(addr,remoteSettings)
- // def isSelfAddress(address: Address) = address == rootPath.address || address == transport.address
-  
+
+  def isSelfAddress(addr: Address) = addr == rootPath.address || addr == transport.address || allowNAT(addr, remoteSettings)
+  // def isSelfAddress(address: Address) = address == rootPath.address || address == transport.address
+
   def actorFor(path: ActorPath): InternalActorRef =
     if (isSelfAddress(path.address)) actorFor(rootGuardian, path.elements)
     else new RemoteActorRef(this, transport, path, Nobody)

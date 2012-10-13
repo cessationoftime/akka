@@ -1,28 +1,37 @@
 package akka.remote
 
 import akka.testkit._
-import akka.dispatch.Await
+import scala.concurrent.Await
 
-import NATFirewallRemoteActorMultiJvmSpec._
+import language.postfixOps
 import com.typesafe.config.ConfigFactory
 import akka.actor.{ActorSystem, Actor, Props}
 import akka.pattern.ask
-import akka.util.duration._
+import scala.concurrent.util.duration._
 import java.util.concurrent.TimeoutException
+import com.typesafe.config.Config
+import testkit.{STMultiNodeSpec, MultiNodeConfig, MultiNodeSpec}
+import akka.testkit._
 
 
-object NATFirewallRemoteActorMultiJvmSpec {
+object NatSpecConfig extends MultiNodeConfig {
 
-  def NrOfNodes = 3
+commonConfig(debugConfig(on = false))
 
+  val node1 = role("node1")
+  val node2 = role("node2")
+  val node3 = role("node3")
+
+  nodeConfig(node1,setup("", "0.0.0.0", 2552) )
+  nodeConfig(node2,setup(""""127.0.0.1:3663"""", "0.0.0.0", 3663))
+  nodeConfig(node3,setup("", "127.0.0.1", 6996))
+  
   class SomeActor extends Actor with Serializable {
-    def receive = {
-      case "hi" => sender ! "hello"
-    }
+    def receive = { case "hi" => sender ! "hello"}
   }
 
-  def setup(addresses: String, host: String, port: Int): ActorSystem = {
-    val config = ConfigFactory.parseString("""
+ def setup(addresses: String, host: String, port: Int): Config = 
+     ConfigFactory.parseString("""
     akka{
       actor {
         provider = "akka.remote.RemoteActorRefProvider"
@@ -37,55 +46,35 @@ object NATFirewallRemoteActorMultiJvmSpec {
       }
     }
   """.format(addresses, host, port))
-    val system = ActorSystem("nat", config)
-    system.actorOf(Props[SomeActor], "service-hello")
-    system
-
-  }
+ 
 
 
 }
 
-//empty public-addresses
-class NATFirewallRemoteActorMultiJvmNode1 extends AkkaSpec(setup("", "0.0.0.0", 2552)) with MultiJvmSync {
+class NatSpecMultiJvmNode1 extends NatSpec
+class NatSpecMultiJvmNode2 extends NatSpec
+class NatSpecMultiJvmNode3 extends NatSpec
 
-  val nodes = NrOfNodes
+class NatSpec extends MultiNodeSpec(NatSpecConfig)
+with STMultiNodeSpec with ImplicitSender with DefaultTimeout {
+  import NatSpecConfig._ 
 
-  "___" must {
-    "___" in {
-      barrier("start")
-      barrier("done")
-	  
-	    barrier("start2")
-      barrier("done2")
-    }
-  }
-}
+  def initialParticipants = roles.size
 
-//public-addresses specified
-class NATFirewallRemoteActorMultiJvmNode2 extends AkkaSpec(setup(""""127.0.0.1:3663"""", "0.0.0.0", 3663)) with MultiJvmSync {
-
-  val nodes = NrOfNodes
-
-  "___" must {
-    "___" in {
-      barrier("start")
-      barrier("done")
-	  
-	   barrier("start2")
-      barrier("done2")
-    }
-  }
-}
-
-class NATFirewallRemoteActorMultiJvmNode3 extends AkkaSpec(setup("", "127.0.0.1", 6996)) with MultiJvmSync with DefaultTimeout {
-
-
-  val nodes = NrOfNodes
+  override def verifySystemShutdown = true
+  
+  system.actorOf(Props[SomeActor], "service-hello")
 
   "NAT Firewall" must {
     "allow or dissalow messages properly in" in {
-      barrier("start")
+      
+    
+      runOn(node1,node2) {
+        enterBarrier("start")
+        enterBarrier("done")
+      }
+      runOn(node3) {
+      enterBarrier("start")
       val actor1 = system.actorFor("akka://nat@127.0.0.1:2552/user/service-hello")
       val actor2 = system.actorFor("akka://nat@127.0.0.1:3663/user/service-hello")
 
@@ -108,10 +97,16 @@ class NATFirewallRemoteActorMultiJvmNode3 extends AkkaSpec(setup("", "127.0.0.1"
      //   Await.result(actor6 ? "hi", 250 millis).asInstanceOf[String]
      // } must produce[TimeoutException]
 
-      barrier("done")
+      enterBarrier("done")
+      }
     }
 	"allow the dynamic deployment of actors across NAT" in {
-	barrier("start2")
+	   runOn(node1,node2) {
+        enterBarrier("start2")
+      enterBarrier("done2")
+      }
+	   runOn(node3) {
+	enterBarrier("start2")
 	        import akka.actor.{ Props, Deploy, Address, AddressFromURIString }
             import akka.remote.RemoteScope
 			
@@ -137,7 +132,8 @@ class NATFirewallRemoteActorMultiJvmNode3 extends AkkaSpec(setup("", "127.0.0.1"
 		
 		Await.result(deployedActor ? "hi", 250 millis).asInstanceOf[String] must be("hello")     
 		
-		barrier("done2")
+		enterBarrier("done2")
+	   }
 	}
   }
 }
